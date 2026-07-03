@@ -1,0 +1,38 @@
+{% if helpers.exists('OPNsense.proban.general') %}
+{
+  "enabled": {% if OPNsense.proban.general.enabled|default("0") == "1" %}true{% else %}false{% endif %},
+  "dry_run": {% if OPNsense.proban.general.dry_run|default("1") == "1" %}true{% else %}false{% endif %},
+  "db": "/var/log/parabolic/offenders.db",
+  "fwlog": "/var/log/filter/latest.log",
+  "eve": "/var/log/suricata/eve.json",
+  "wan_if": {{ OPNsense.proban.general.wan_if|default("")|tojson }},
+  "protected_ports": {{ OPNsense.proban.general.protected_ports|default("")|tojson }},
+  "pf_table": "parabolic_block",
+  "pf_table_drop": "parabolic_drop",
+  "pf_table6": "parabolic_block6",
+  "pf_table_drop6": "parabolic_drop6",
+  "allowlist": {{ OPNsense.proban.general.allowlist|default("")|tojson }},
+  "grace_hits": {{ OPNsense.proban.general.grace_hits|default("1", true) }},
+  "step_secs": {{ OPNsense.proban.general.step_secs|default("30", true) }},
+  "multiplier": {{ OPNsense.proban.general.multiplier|default("1.5", true) }},
+  "max_ban_secs": {{ OPNsense.proban.general.max_ban_secs|default("2592000", true) }},
+  "decay_amount": {{ OPNsense.proban.general.decay_amount|default("30", true) }},
+  "decay_interval": {{ OPNsense.proban.general.decay_interval|default("60", true) }},
+  "event_retention_days": {{ OPNsense.proban.general.event_retention_days|default("14", true) }},
+  "offender_amnesia_days": {{ OPNsense.proban.general.offender_amnesia_days|default("30", true) }},
+  "sources": {
+    "firewall": {% if OPNsense.proban.general.src_firewall|default("1") == "1" %}true{% else %}false{% endif %},
+    "suricata": {% if OPNsense.proban.general.src_suricata|default("1") == "1" %}true{% else %}false{% endif %}
+  },
+  "action": {{ OPNsense.proban.general.action|default("drop")|tojson }},
+  "tarpit_ip": {{ OPNsense.proban.general.tarpit_ip|default("")|tojson }},
+  "tarpit_ports": {{ OPNsense.proban.general.tarpit_ports|default("")|tojson }},
+  "tarpit_ip6": {{ OPNsense.proban.general.tarpit_ip6|default("")|tojson }},
+  "v6_aggregate": {{ OPNsense.proban.general.v6_aggregate|default("4", true) }},
+  "post_max_action": {{ OPNsense.proban.general.post_max_action|default("hold", true)|tojson }},
+  "blackhole_hours": {{ OPNsense.proban.general.blackhole_hours|default("12", true) }},
+  "blackhole_decay": {{ OPNsense.proban.general.blackhole_decay|default("7200", true) }}
+}
+{% else %}
+{"enabled": false, "dry_run": true, "db": "/var/log/parabolic/offenders.db", "fwlog": "/var/log/filter/latest.log", "eve": "/var/log/suricata/eve.json", "wan_if": "", "protected_ports": "", "pf_table": "parabolic_block", "allowlist": "", "grace_hits": 1, "step_secs": 30, "multiplier": 1.5, "max_ban_secs": 2592000, "decay_amount": 30, "decay_interval": 60, "event_retention_days": 14, "offender_amnesia_days": 30, "sources": {"firewall": true, "suricata": true}, "action": "drop", "tarpit_ip": "", "tarpit_ports": ""}
+{% endif %}

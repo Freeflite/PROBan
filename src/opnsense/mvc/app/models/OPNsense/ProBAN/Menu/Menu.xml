@@ -1,0 +1,5 @@
+<menu>
+    <Reporting>
+        <ProBAN url="/ui/proban" cssClass="fa fa-ban fa-fw" order="80"/>
+    </Reporting>
+</menu>

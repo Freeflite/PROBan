@@ -1,0 +1,127 @@
+<model>
+    <mount>//OPNsense/proban/general</mount>
+    <description>ProBAN progressive-ban settings</description>
+    <version>0.1.0</version>
+    <items>
+        <enabled type="BooleanField">
+            <Default>1</Default>
+            <Required>Y</Required>
+        </enabled>
+        <dry_run type="BooleanField">
+            <Default>1</Default>
+            <Required>Y</Required>
+        </dry_run>
+        <wan_if type="TextField">
+            <Mask>/^[0-9a-zA-Z._]{1,32}$/</Mask>
+            <ValidationMessage>Enter the WAN interface device name the engine reads from the filter log (e.g. vtnet1, igb0). Use the physical untrusted uplink, not a WireGuard interface.</ValidationMessage>
+        </wan_if>
+        <protected_ports type="TextField">
+            <Mask>/^[\s0-9,]*$/</Mask>
+            <ValidationMessage>Comma or space separated list of ports to ignore for ProBAN (e.g. your OpenVPN TCP port or other services). Helps VPN and legitimate inbound TCP users avoid being treated as knocks.</ValidationMessage>
+        </protected_ports>
+        <grace_hits type="IntegerField">
+            <Default>1</Default>
+            <MinimumValue>1</MinimumValue>
+            <MaximumValue>1000</MaximumValue>
+            <Required>Y</Required>
+        </grace_hits>
+        <step_secs type="IntegerField">
+            <Default>30</Default>
+            <MinimumValue>1</MinimumValue>
+            <MaximumValue>86400</MaximumValue>
+            <Required>Y</Required>
+        </step_secs>
+        <multiplier type="NumericField">
+            <Default>1.5</Default>
+            <Required>Y</Required>
+            <MinimumValue>1.0</MinimumValue>
+            <MaximumValue>10.0</MaximumValue>
+            <ValidationMessage>Multiplier must be between 1.0 and 10.0 (e.g. 1.5).</ValidationMessage>
+        </multiplier>
+        <max_ban_secs type="IntegerField">
+            <Default>2592000</Default>
+            <MinimumValue>60</MinimumValue>
+            <MaximumValue>315360000</MaximumValue>
+            <Required>Y</Required>
+        </max_ban_secs>
+        <decay_amount type="IntegerField">
+            <Default>30</Default>
+            <MinimumValue>1</MinimumValue>
+            <MaximumValue>86400</MaximumValue>
+            <Required>Y</Required>
+        </decay_amount>
+        <decay_interval type="IntegerField">
+            <Default>60</Default>
+            <MinimumValue>1</MinimumValue>
+            <MaximumValue>86400</MaximumValue>
+            <Required>Y</Required>
+        </decay_interval>
+        <event_retention_days type="IntegerField">
+            <Default>14</Default>
+            <MinimumValue>0</MinimumValue>
+            <MaximumValue>3650</MaximumValue>
+            <Required>Y</Required>
+        </event_retention_days>
+        <offender_amnesia_days type="IntegerField">
+            <Default>30</Default>
+            <MinimumValue>0</MinimumValue>
+            <MaximumValue>3650</MaximumValue>
+            <Required>Y</Required>
+        </offender_amnesia_days>
+        <src_firewall type="BooleanField">
+            <Default>1</Default>
+            <Required>Y</Required>
+        </src_firewall>
+        <src_suricata type="BooleanField">
+            <Default>1</Default>
+            <Required>Y</Required>
+        </src_suricata>
+        <allowlist type="TextField">
+            <Mask>/^[\s0-9a-fA-F:.\/]*$/</Mask>
+            <ValidationMessage>Allowlist is a whitespace/newline separated list of CIDRs.</ValidationMessage>
+        </allowlist>
+        <action type="TextField">
+            <Default>drop</Default>
+            <Required>Y</Required>
+            <Mask>/^(drop|tarpit)$/</Mask>
+            <ValidationMessage>Action must be drop or tarpit.</ValidationMessage>
+        </action>
+        <tarpit_ip type="TextField">
+            <Mask>/^[0-9a-fA-F:.]*$/</Mask>
+            <ValidationMessage>Tarpit target must be an IP address.</ValidationMessage>
+        </tarpit_ip>
+        <tarpit_ports type="TextField">
+            <Mask>/^[\s0-9,]*$/</Mask>
+            <ValidationMessage>Ports: comma or space separated port numbers.</ValidationMessage>
+        </tarpit_ports>
+        <tarpit_ip6 type="TextField">
+            <Mask>/^[0-9a-fA-F:]*$/</Mask>
+            <ValidationMessage>IPv6 tarpit target must be an IPv6 address (leave blank to keep IPv6 block-only).</ValidationMessage>
+        </tarpit_ip6>
+        <v6_aggregate type="IntegerField">
+            <Default>4</Default>
+            <MinimumValue>0</MinimumValue>
+            <MaximumValue>65536</MaximumValue>
+            <Required>Y</Required>
+            <ValidationMessage>Distinct /128 offenders in a /64 before escalating to a whole-/64 ban (0 = never aggregate, /128 only).</ValidationMessage>
+        </v6_aggregate>
+        <post_max_action type="TextField">
+            <Default>hold</Default>
+            <Required>Y</Required>
+            <Mask>/^(hold|blackhole)$/</Mask>
+            <ValidationMessage>After max ban: hold (keep tarpitting) or blackhole (drop for a while).</ValidationMessage>
+        </post_max_action>
+        <blackhole_hours type="IntegerField">
+            <Default>12</Default>
+            <MinimumValue>1</MinimumValue>
+            <MaximumValue>8760</MaximumValue>
+            <Required>Y</Required>
+        </blackhole_hours>
+        <blackhole_decay type="IntegerField">
+            <Default>7200</Default>
+            <MinimumValue>1</MinimumValue>
+            <MaximumValue>315360000</MaximumValue>
+            <Required>Y</Required>
+        </blackhole_decay>
+    </items>
+</model>

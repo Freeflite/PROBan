@@ -1,0 +1,9 @@
+<acl>
+    <page-reporting-proban>
+        <name>Reporting: ProBAN</name>
+        <patterns>
+            <pattern>ui/proban</pattern>
+            <pattern>api/proban/*</pattern>
+        </patterns>
+    </page-reporting-proban>
+</acl>

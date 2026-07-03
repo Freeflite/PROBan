@@ -1,0 +1,5 @@
+{% if helpers.exists('OPNsense.proban.general.enabled') and OPNsense.proban.general.enabled|default("0") == "1" %}
+proban_enable="YES"
+{% else %}
+proban_enable="NO"
+{% endif %}

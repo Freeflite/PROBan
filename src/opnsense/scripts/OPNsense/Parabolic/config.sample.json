@@ -1,0 +1,32 @@
+{
+  "enabled": true,
+  "dry_run": true,
+  "db": "/var/log/parabolic/offenders.db",
+  "fwlog": "/var/log/filter/latest.log",
+  "eve": "/var/log/suricata/eve.json",
+  "wan_if": "vtnet1",
+  "protected_ports": "",
+  "pf_table": "parabolic_block",
+  "allowlist": [
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "127.0.0.0/8",
+    "8.8.8.8/32",
+    "8.8.4.4/32",
+    "1.1.1.1/32",
+    "1.0.0.1/32"
+  ],
+  "grace_hits": 1,
+  "step_secs": 30,
+  "multiplier": 1.5,
+  "max_ban_secs": 2592000,
+  "decay_amount": 30,
+  "decay_interval": 60,
+  "event_retention_days": 14,
+  "offender_amnesia_days": 30,
+  "sources": { "firewall": true, "suricata": true },
+  "action": "drop",
+  "tarpit_ip": "",
+  "tarpit_ports": ""
+}

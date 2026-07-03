@@ -1,0 +1,11 @@
+ProBAN progressively bans abusive IPs on OPNsense. Each offender's ban grows
+with every probe and decays during silence, so casual scanners get seconds
+while persistent attackers get days-to-months -- no fixed tiers to tune.
+
+Banned IPs can be dropped, funneled into a resource-burning tarpit, or
+redirected to a honeypot on chosen ports. The redirect is reflection-locked to
+private/LAN/VPN targets and is tamper-evident, so it can never be turned into an
+outbound reflection tool. A live dashboard shows offenders, an offense timeline,
+severity distribution, per-IP drill-down and target health.
+
+WWW: https://github.com/Freeflite/PROBan

@@ -1,0 +1,11 @@
+# ProBAN is a Unix / FreeBSD (OPNsense) plugin. Enforce LF line endings
+# everywhere so the rc.d script, shell supervisor, python, and PHP never
+# end up with CRLF (which breaks shebangs and rc scripts) — regardless of
+# the platform the repo is cloned or edited on.
+* text=auto eol=lf
+
+# binary assets — leave untouched
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+
+# Rust
+/tarpit/target/
+
+# instance config (generated on the box from the template; never commit a live one).
+# NB: scope this to the engine dir so it does NOT match the Volt template of the same name.
+/src/opnsense/scripts/OPNsense/Parabolic/config.json
+
+# editor / OS
+*.swp
+.DS_Store
+Thumbs.db
+
+# AI / assistant artifacts (session notes, memory dumps, tool state) -- never commit
+grokMemory.md
+*grokMemory*
+*.grok.md
+CLAUDE.md
+GEMINI.md
+.claude/
+.cursor/
+.aider*

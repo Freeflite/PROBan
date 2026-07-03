@@ -1,0 +1,23 @@
+#!/bin/sh
+#
+# PROVIDE: proban
+# REQUIRE: LOGIN
+# KEYWORD: shutdown
+#
+# ProBAN progressive-ban engine. The engine itself is a run-once script; the
+# supervisor loop (proban_supervise.sh) is what turns it into a service.
+
+. /etc/rc.subr
+
+name="proban"
+desc="ProBAN progressive-ban engine"
+rcvar="proban_enable"
+pidfile="/var/run/${name}.pid"
+command="/usr/sbin/daemon"
+proban_supervisor="/usr/local/opnsense/scripts/OPNsense/Parabolic/proban_supervise.sh"
+command_args="-f -r -P ${pidfile} /bin/sh ${proban_supervisor}"
+
+load_rc_config $name
+: ${proban_enable:="NO"}
+
+run_rc_command "$1"
