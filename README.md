@@ -91,10 +91,11 @@ ProBAN is two pieces that snap together: the **OPNsense plugin** (the brain — 
 
 ### 1. Build & install the plugin
 
-On the OPNsense box (or a matching FreeBSD dev VM):
+Build the package on a **FreeBSD VM matching your OPNsense version** (recommended), then copy the resulting `.pkg` to the firewall and `pkg add` it there. You can build on the OPNsense box itself instead, but a stock appliance ships without build tools — install them first (`pkg install -y git`; `make` is already in the FreeBSD base).
 
 ```sh
 git clone https://github.com/opnsense/plugins
+git clone https://github.com/Freeflite/PROBan   # this repo — the plugin source (the cp below needs it)
 cp -a PROBan plugins/security/proban            # drop this repo in as the plugin
 cd plugins/security/proban
 make DEVELOPER=1 install                         # symlink live for iteration
@@ -107,7 +108,10 @@ The `.pkg` post-install registers the model, renders `config.json` from the temp
 
 TinyPit is a hostile-traffic magnet, so it runs **off** the firewall — an LXC/VM on a segmented DMZ with **no LAN or internet egress** (a compromised tarpit must be a dead end). Full details in [TinyPit](https://github.com/Freeflite/TinyPit); the short version:
 
+> **These commands run on the Linux DMZ box — not on OPNsense** (there's no systemd or cargo there). They need the Rust toolchain with the musl target (`rustup target add x86_64-unknown-linux-musl`) and your distro's C build tools (on Debian/Ubuntu: `apt install build-essential musl-tools`).
+
 ```sh
+git clone https://github.com/Freeflite/TinyPit && cd TinyPit
 # portable static binary — runs on any Linux regardless of glibc:
 cargo build --release --target x86_64-unknown-linux-musl
 install -m755 target/x86_64-unknown-linux-musl/release/tinypit /usr/local/bin/tinypit
