@@ -744,6 +744,58 @@ class PfCounters(unittest.TestCase):
 
 
 class PfTableSync(unittest.TestCase):
+    def test_missing_table_can_remain_empty_or_be_populated(self):
+        for returncode, desired, error_output in (
+                (1, [], "pfctl: Table does not exist.\n"),
+                (1, [], "pfctl: Table does not exist\n"),
+                (1, [], "No ALTQ support in kernel\nALTQ related functions disabled\npfctl: Table does not exist.\n"),
+                (1, ["203.0.113.7"], "pfctl: Table does not exist.\n"),
+                (255, [], "pfctl: Table does not exist.\n"),
+                (255, [], "pfctl: Table does not exist\n"),
+                (255, [], "No ALTQ support in kernel\nALTQ related functions disabled\npfctl: Table does not exist.\n"),
+                (255, ["203.0.113.7"], "pfctl: Table does not exist.\n")):
+            with self.subTest(returncode=returncode, desired=desired, error_output=error_output):
+                def run_pfctl(command, **kwargs):
+                    if command[4] == "show":
+                        raise subprocess.CalledProcessError(
+                            returncode, command, stderr=error_output)
+                    return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+                with patch("proban.enforce.subprocess.run", side_effect=run_pfctl) as runner:
+                    enforce.synctable("parabolic_drop", desired)
+                self.assertEqual(runner.call_count, 2 if desired else 1)
+                if desired:
+                    self.assertEqual(runner.call_args.args[0],
+                                     ["pfctl", "-t", "parabolic_drop", "-T", "add", "-f", "-"])
+                    self.assertEqual(runner.call_args.kwargs["input"], "203.0.113.7\n")
+
+    def test_missing_unused_tables_do_not_rollback_collected_hits(self):
+        cfg = make_cfg(dry_run=False, sources={"firewall": True, "suricata": False})
+        connection = store.db(cfg)
+        self.addCleanup(connection.close)
+        key = "pf_counters:" + cfg.pf_table
+        cleared = "Wed Nov 4 11:00:00 2026"
+        store.ss(connection, key, json.dumps({"203.0.113.7": [cleared, 100]}))
+        connection.commit()
+
+        def run_pfctl(command, **kwargs):
+            if command[2] in (cfg.pf_table_drop, cfg.pf_table_drop6):
+                raise subprocess.CalledProcessError(
+                    255, command, stderr="pfctl: Table does not exist.\n")
+            self.assertEqual(command[-1], "show")
+            output = ""
+            if command[2] == cfg.pf_table:
+                output = PfCounters.output("203.0.113.7", 125, cleared) if "-v" in command else "203.0.113.7\n"
+            return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+        with patch("proban.enforce.subprocess.run", side_effect=run_pfctl), patch("engine.time.time", return_value=1000):
+            with connection:
+                engine.run_cycle(cfg, connection)
+        self.assertEqual(connection.execute("SELECT hits,last_seen FROM offenders").fetchall(), [(25, 1000)])
+        self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], 25)
+        self.assertEqual(json.loads(store.gs(connection, key)), {"203.0.113.7": [cleared, 125]})
+        self.assertFalse(connection.in_transaction)
+
     def test_large_changes_use_one_batch_per_operation(self):
         current = [f"198.51.{index // 256}.{index % 256}" for index in range(1000)]
         desired = [f"203.0.{index // 256}.{index % 256}" for index in range(1000)]
@@ -848,6 +900,7 @@ class PfTableSync(unittest.TestCase):
         store.ss(connection, key, snapshot)
         for operation, attempts in (("show", 1), ("add", 2), ("delete", 3)):
             for error in (subprocess.CalledProcessError(1, "pfctl"),
+                          subprocess.CalledProcessError(255, "pfctl", stderr="pfctl: /dev/pf: Permission denied\n"),
                           subprocess.TimeoutExpired("pfctl", 10), OSError("pf unavailable")):
                 with self.subTest(operation=operation, error=type(error).__name__):
                     def run_pfctl(command, **kwargs):

@@ -86,8 +86,15 @@ def poll_counters(cfg, connection, now):
 
 
 def synctable(table, ips, connection=None, additive=False):
-    cur = set(subprocess.run(["pfctl", "-t", table, "-T", "show"],
-                             capture_output=True, text=True, check=True, timeout=10).stdout.split())
+    try:
+        cur = set(subprocess.run(["pfctl", "-t", table, "-T", "show"],
+                                 capture_output=True, text=True, check=True, timeout=10).stdout.split())
+    except subprocess.CalledProcessError as error:
+        if error.returncode not in (1, 255) or not any(
+                line in ("pfctl: Table does not exist", "pfctl: Table does not exist.")
+                for line in (error.stderr or "").splitlines()):
+            raise
+        cur = set()
     desired = set(ips)
     additions = desired - cur
     removals = set() if additive else cur - desired
