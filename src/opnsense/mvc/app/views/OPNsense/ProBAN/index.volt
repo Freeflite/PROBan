@@ -156,11 +156,34 @@
     </div>
     <div class="pb-sect">
       <div class="h">{{ lang._('Detection sources') }}</div>
-      <label class="checkbox-inline"><input type="checkbox" id="pbSrcFw"> {{ lang._('Firewall SYN probes') }}</label>
+      <label class="checkbox-inline"><input type="checkbox" id="pbSrcFw"> {{ lang._('Firewall log') }}</label>
       <label class="checkbox-inline"><input type="checkbox" id="pbSrcSuri"> {{ lang._('Suricata alerts') }}</label>
+      <div style="margin-top:8px;">
+        <label class="checkbox-inline"><input type="checkbox" id="pbDetectSyn" checked> {{ lang._('TCP SYN') }}</label>
+        <label class="checkbox-inline"><input type="checkbox" id="pbDetectUdp"> {{ lang._('UDP') }}</label>
+        <label class="checkbox-inline"><input type="checkbox" id="pbDetectTcpScan"> {{ lang._('TCP FIN / NULL / XMAS') }}</label>
+      </div>
+      <div class="checkbox"><label><input type="checkbox" id="pbDetectTcpInvalid"> {{ lang._('TCP SYN+FIN / SYN+RST') }}</label></div>
+      <div class="row" style="margin-top:8px;">
+        <div class="col-xs-6"><label for="pbScanThreshold" style="font-size:11px;">{{ lang._('UDP / TCP-flag hits per source IP') }}</label><input type="number" min="1" max="1000" class="form-control input-sm" id="pbScanThreshold" value="5"></div>
+        <div class="col-xs-6"><label for="pbScanWindow" style="font-size:11px;">{{ lang._('Scan window (seconds)') }}</label><input type="number" min="1" max="3600" class="form-control input-sm" id="pbScanWindow" value="60"></div>
+      </div>
+      <div class="checkbox"><label><input type="checkbox" id="pbDetectPortscan"> {{ lang._('Portscan detection (distinct ports)') }}</label></div>
+      <div class="row" id="pbPortscanCfg" style="display:none;margin-top:8px;">
+        <div class="col-xs-6"><label for="pbPortscanThreshold" style="font-size:11px;" title="{{ lang._('Counted separately per source IP, destination IP and protocol.') }}">{{ lang._('Distinct destination ports') }}</label><input type="number" min="2" max="65535" class="form-control input-sm" id="pbPortscanThreshold" value="10"></div>
+        <div class="col-xs-6"><label for="pbPortscanWindow" style="font-size:11px;">{{ lang._('Portscan window (seconds)') }}</label><input type="number" min="1" max="3600" class="form-control input-sm" id="pbPortscanWindow" value="60"></div>
+      </div>
       <div class="row" style="margin-top:8px;">
         <div class="col-xs-6"><label style="font-size:11px;">{{ lang._('WAN interface device') }} <small class="text-muted">{{ lang._('(filter-log parsing)') }}</small></label><input type="text" class="form-control input-sm" id="pbWanIf" placeholder="vtnet1"></div>
         <div class="col-xs-6"><label style="font-size:11px;">{{ lang._('Protected ports') }} <small class="text-muted">{{ lang._('(ignore for probes/knocks, e.g. OpenVPN TCP)') }}</small></label><input type="text" class="form-control input-sm" id="pbProtPorts" placeholder="1194, 443"></div>
+      </div>
+      <div class="checkbox" style="margin-top:12px;"><label><input type="checkbox" id="pbSuriPriority"> {{ lang._('Priority bans for Suricata alerts') }}</label></div>
+      <div id="pbSuriPriorityCfg" style="display:none;">
+        <div class="row">
+          <div class="col-xs-6"><label for="pbSuriSeverity" style="font-size:11px;">{{ lang._('Priority severity') }}</label><select class="form-control input-sm" id="pbSuriSeverity"><option value="1">{{ lang._('High (1)') }}</option><option value="2">{{ lang._('High / medium (1-2)') }}</option><option value="3">{{ lang._('All (1-3)') }}</option></select></div>
+          <div class="col-xs-6"><label for="pbSuriMinimum" style="font-size:11px;">{{ lang._('Minimum ban (seconds)') }}</label><input type="number" min="60" max="315360000" class="form-control input-sm" id="pbSuriMinimum" value="1800"></div>
+        </div>
+        <div style="margin-top:8px;"><label for="pbSuriSids" style="font-size:11px;">{{ lang._('Priority signature IDs (optional)') }}</label><input type="text" class="form-control input-sm" id="pbSuriSids" placeholder="1000001, 2000002" title="{{ lang._('Empty matches all signatures at the selected severity.') }}"></div>
       </div>
     </div>
     <div class="pb-sect">

@@ -49,8 +49,11 @@ def poll_counters(cfg, connection, now):
             (cfg.pf_table6, cfg.pf_table_drop6, cfg.tarpit_ip6)):
         if cfg.action != "tarpit" or not rules.is_private_target(target):
             tables.append(table)
-        elif cfg.blackhole_on:
-            tables.append(drop_table)
+        else:
+            if cfg.detect_udp or cfg.detect_portscan:
+                tables.append(table)
+            if cfg.blackhole_on:
+                tables.append(drop_table)
     counts = {}
     errors = []
     for table in tables:
@@ -74,7 +77,7 @@ def poll_counters(cfg, connection, now):
                     counts[address] = counts.get(address, 0) + delta
         store.ss(connection, key, json.dumps(current))
     for address, count in counts.items():
-        reason = f"{count} blocked packets"
+        reason = f"{count} additional incoming packets blocked by PF while the ban is active"
         if "/" in address:
             reason += " (subnet total)"
         store.record_batch(cfg, connection, address, "pf", reason, now, count)
@@ -128,6 +131,21 @@ def rdr_target(table):
     return None
 
 
+def safe_v6_plan(cfg, addresses):
+    members = {}
+    for address in addresses:
+        subnet = aggregate.net64(address)
+        if subnet is not None:
+            members.setdefault(subnet, []).append(address)
+    planned = []
+    for address in aggregate.plan_v6(addresses, cfg.v6_aggregate):
+        if not rules.allowed(cfg, address):
+            planned.append(address)
+        else:
+            planned.extend(member for member in members.get(address, []) if not rules.allowed(cfg, member))
+    return list(dict.fromkeys(planned))
+
+
 def table_plan(cfg, rows, now):
     v4 = [(ip, bh) for ip, bh in rows if ":" not in ip]
     v6 = [(ip, bh) for ip, bh in rows if ":" in ip]
@@ -150,8 +168,8 @@ def table_plan(cfg, rows, now):
     else:
         v6_drop_raw = []
         v6_keep_raw = [ip for ip, bh in v6]
-    v6_keep = aggregate.plan_v6(v6_keep_raw, cfg.v6_aggregate)
-    v6_drop = aggregate.plan_v6(v6_drop_raw, cfg.v6_aggregate)
+    v6_keep = safe_v6_plan(cfg, v6_keep_raw)
+    v6_drop = safe_v6_plan(cfg, v6_drop_raw)
 
     active = [ip for ip, bh in rows]
     dropped = v4_drop + v6_drop

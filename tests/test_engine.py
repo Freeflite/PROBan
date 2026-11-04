@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import xml.etree.ElementTree as ElementTree
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.normpath(os.path.join(
@@ -42,6 +43,348 @@ def make_cfg(**overrides):
     }
     d.update(overrides)
     return config.Cfg(d)
+
+
+class ScanDetection(unittest.TestCase):
+    def test_scan_defaults_are_conservative_and_configurable(self):
+        cfg = config.Cfg({})
+        self.assertEqual((cfg.scan_threshold, cfg.scan_window), (5, 60))
+        self.assertTrue(cfg.detect_syn)
+        self.assertFalse(cfg.detect_udp)
+        self.assertFalse(cfg.detect_tcp_scan)
+        self.assertFalse(cfg.detect_tcp_invalid)
+        self.assertFalse(cfg.detect_portscan)
+        self.assertEqual((cfg.portscan_threshold, cfg.portscan_window), (10, 60))
+        custom = config.Cfg({"scan_threshold": 12, "scan_window": 120,
+                     "portscan_threshold": 20, "portscan_window": 90})
+        self.assertEqual((custom.scan_threshold, custom.scan_window), (12, 120))
+        self.assertEqual((custom.portscan_threshold, custom.portscan_window), (20, 90))
+
+    def test_scan_model_defaults_match_engine_defaults(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        model = ElementTree.parse(os.path.join(root, "src", "opnsense", "mvc", "app", "models",
+                                               "OPNsense", "ProBAN", "General.xml"))
+        expected = {"detect_syn": "1", "detect_udp": "0", "detect_tcp_scan": "0",
+                    "detect_tcp_invalid": "0", "detect_portscan": "0",
+                    "portscan_threshold": "10", "portscan_window": "60",
+                    "scan_threshold": "5", "scan_window": "60", "suricata_priority": "0",
+                    "suricata_priority_severity": "1", "suricata_priority_secs": "1800"}
+        for field, value in expected.items():
+            with self.subTest(field=field):
+                self.assertEqual(model.findtext(f"items/{field}/Default"), value)
+
+    def test_default_scan_threshold_requires_five_recent_hits_per_source(self):
+        cfg = make_cfg()
+        connection = store.db(cfg)
+        self.addCleanup(connection.close)
+        for source in ("udp", "tcp-scan"):
+            address = "203.0.113.7" if source == "udp" else "203.0.113.8"
+            for timestamp in (900, 1000, 1001, 1002, 1003):
+                self.assertFalse(store.record_batch(cfg, connection, address, source, "blocked probe", timestamp, 1))
+            self.assertEqual(connection.execute("SELECT ban_secs FROM offenders WHERE ip=?", (address,)).fetchone()[0], 0)
+            self.assertTrue(store.record_batch(cfg, connection, address, source, "blocked probe", 1004, 1))
+            reasons = connection.execute("SELECT reasons FROM offenders WHERE ip=?", (address,)).fetchone()[0]
+            self.assertIn("5 probes in 60s (threshold 5)", reasons)
+
+    @staticmethod
+    def line(protocol="tcp", flags="S", port=23, version=4, action="block", source=None,
+             destination=None, timestamp="2026-11-04T12:00:00+00:00"):
+        source = source or ("203.0.113.7" if version == 4 else "2001:db8:bad::7")
+        destination = destination or ("192.0.2.1" if version == 4 else "2001:db8::1")
+        header = ["21", "", "", "trk", "vtnet1", "match", action, "in", str(version)]
+        number = "6" if protocol == "tcp" else "17"
+        if version == 4:
+            fields = header + ["0x0", "", "64", "1", "0", "DF", number, protocol, "60",
+                               source, destination, "54321", str(port), "0"]
+        else:
+            fields = header + ["0x00", "0x0", "64", protocol, number, "60",
+                               source, destination, "54321", str(port), "0"]
+        if protocol == "tcp":
+            fields += [flags, "", ""]
+        return f"x {timestamp} h [x] " + ",".join(fields) + "\n"
+
+    def ingest_lines(self, lines, **overrides):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "filter.log")
+            with open(path, "w") as handle:
+                handle.writelines(lines)
+            cfg = make_cfg(fwlog=path, **overrides)
+            connection = store.db(cfg)
+            self.addCleanup(connection.close)
+            pending = set()
+            count = ingest.ingest_fwlog(cfg, connection, 1793793600, pending)
+            return count, connection, pending
+
+    def test_syn_detection_can_be_disabled(self):
+        count, connection, pending = self.ingest_lines([self.line()], detect_syn=False)
+        self.assertEqual(count, 0)
+        self.assertEqual(pending, set())
+
+    def test_udp_detection_is_opt_in_and_respects_protected_ports(self):
+        for version in (4, 6):
+            for enabled in (False, True):
+                with self.subTest(version=version, enabled=enabled):
+                    lines = [self.line("udp", port=53, version=version),
+                             self.line("udp", port=1194, version=version)]
+                    count, connection, pending = self.ingest_lines(
+                        lines, detect_udp=enabled, protected_ports="1194", scan_threshold=1)
+                    self.assertEqual(count, int(enabled))
+                    self.assertEqual(len(pending), int(enabled))
+
+    def test_fin_null_and_xmas_scans_are_opt_in(self):
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                lines = [self.line(flags=flags) for flags in ("F", "", "FPU", "A", "R", "SA")]
+                count, connection, pending = self.ingest_lines(
+                    lines, detect_tcp_scan=enabled, scan_threshold=1)
+                self.assertEqual(count, 3 if enabled else 0)
+                self.assertEqual(len(pending), int(enabled))
+
+    def test_scan_threshold_uses_recent_hits_without_losing_history(self):
+        cfg = make_cfg(scan_threshold=3, scan_window=60)
+        connection = store.db(cfg)
+        self.addCleanup(connection.close)
+        for source in ("udp", "tcp-scan"):
+            address = "203.0.113.7" if source == "udp" else "203.0.113.8"
+            for timestamp in (900, 1000, 1001):
+                self.assertFalse(store.record_batch(cfg, connection, address, source, "blocked probe", timestamp, 1))
+            row = connection.execute("SELECT hits,ban_secs FROM offenders WHERE ip=?", (address,)).fetchone()
+            self.assertEqual(row, (3, 0))
+            self.assertTrue(store.record_batch(cfg, connection, address, source, "blocked probe", 1002, 1))
+            self.assertEqual(connection.execute("SELECT SUM(hits) FROM events WHERE ip=?", (address,)).fetchone()[0], 4)
+            self.assertIn("3 probes in 60s", connection.execute("SELECT reasons FROM offenders WHERE ip=?", (address,)).fetchone()[0])
+
+    def test_conflicting_tcp_flags_are_independently_opt_in(self):
+        for version in (4, 6):
+            for enabled in (False, True):
+                with self.subTest(version=version, enabled=enabled):
+                    lines = [self.line(flags=flags, version=version)
+                             for flags in ("SF", "SR", "SFA", "SRA", "SFR", "SA", "A", "R", "FA")]
+                    count, connection, pending = self.ingest_lines(
+                        lines, detect_syn=False, detect_tcp_invalid=enabled, scan_threshold=1)
+                    self.assertEqual(count, 5 if enabled else 0)
+                    self.assertEqual(len(pending), int(enabled))
+                    if enabled:
+                        reasons = " ".join(row[0] for row in connection.execute("SELECT reason FROM events"))
+                        self.assertIn("TCP SYN+FIN", reasons)
+                        self.assertIn("TCP SYN+RST", reasons)
+
+    def test_conflicting_flags_require_the_scan_threshold(self):
+        for amount in (4, 5):
+            with self.subTest(amount=amount):
+                count, connection, pending = self.ingest_lines(
+                    [self.line(flags="SF")] * amount, detect_tcp_invalid=True)
+                self.assertEqual(count, amount)
+                self.assertEqual(bool(pending), amount == 5)
+
+    def test_portscan_is_opt_in_and_counts_distinct_ports(self):
+        for protocol in ("tcp", "udp"):
+            for enabled in (False, True):
+                with self.subTest(protocol=protocol, enabled=enabled):
+                    lines = [self.line(protocol=protocol, port=port) for port in (21, 21, 22, 23)]
+                    count, connection, pending = self.ingest_lines(
+                        lines, detect_syn=False, detect_portscan=enabled, portscan_threshold=3)
+                    self.assertEqual(count, 4 if enabled else 0)
+                    self.assertEqual(len(pending), int(enabled))
+                    if enabled:
+                        self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], 4)
+                        self.assertIn("3 distinct", connection.execute("SELECT reasons FROM offenders").fetchone()[0])
+
+    def test_repeated_hits_on_one_port_do_not_trigger_portscan(self):
+        count, connection, pending = self.ingest_lines(
+            [self.line(port=23)] * 12, detect_syn=False, detect_portscan=True, portscan_threshold=3)
+        self.assertEqual(count, 12)
+        self.assertEqual(pending, set())
+        self.assertEqual(connection.execute("SELECT ban_secs FROM offenders").fetchone()[0], 0)
+
+    def test_portscan_is_separate_per_source_target_and_protocol(self):
+        lines = [self.line(port=21), self.line(port=22), self.line(protocol="udp", port=23),
+                 self.line(port=23, source="203.0.113.8"), self.line(port=23, destination="192.0.2.2"),
+                 self.line(flags="A", port=24), self.line(flags="R", port=25),
+                 self.line(port=1194), self.line(source="203.0.113.9", port=26),
+                 self.line(protocol="udp", action="pass", port=27)]
+        count, connection, pending = self.ingest_lines(
+            lines, detect_syn=False, detect_portscan=True, portscan_threshold=3,
+            protected_ports="1194", allowlist="203.0.113.9")
+        self.assertEqual(count, 5)
+        self.assertEqual(pending, set())
+
+    def test_portscan_window_excludes_old_ports(self):
+        lines = [self.line(port=21, timestamp="2026-11-04T11:58:00+00:00"),
+                 self.line(port=22), self.line(port=23)]
+        count, connection, pending = self.ingest_lines(
+            lines, detect_syn=False, detect_portscan=True, portscan_threshold=3, portscan_window=60)
+        self.assertEqual(count, 3)
+        self.assertEqual(pending, set())
+
+    def test_packet_and_portscan_detection_do_not_double_count_hits(self):
+        count, connection, pending = self.ingest_lines(
+            [self.line(protocol="udp", port=port) for port in (21, 22, 23)],
+            detect_udp=True, scan_threshold=10, detect_portscan=True, portscan_threshold=3)
+        self.assertEqual(count, 3)
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], 3)
+        self.assertIn("3 distinct", connection.execute("SELECT reasons FROM offenders").fetchone()[0])
+
+    def test_portscan_counts_survive_a_database_reopen(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = make_cfg(db=os.path.join(directory, "offenders.db"), detect_portscan=True, portscan_threshold=3)
+            connection = store.db(cfg)
+            store.record_batch(cfg, connection, "203.0.113.7", "portscan", "TCP probe", 1000, 1,
+                               scan_target=("192.0.2.1", "tcp", 21))
+            connection.commit()
+            connection.close()
+            connection = store.db(cfg)
+            try:
+                self.assertFalse(store.record_batch(cfg, connection, "203.0.113.7", "portscan", "TCP probe", 1001, 1,
+                                                    scan_target=("192.0.2.1", "tcp", 22)))
+                self.assertTrue(store.record_batch(cfg, connection, "203.0.113.7", "portscan", "TCP probe", 1002, 1,
+                                                   scan_target=("192.0.2.1", "tcp", 23)))
+                self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], 3)
+            finally:
+                connection.close()
+
+    def test_portscan_reaches_fast_enforcement_across_separate_cycles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "filter.log")
+            cfg = make_cfg(fwlog=path, dry_run=False, detect_syn=False, detect_portscan=True,
+                           portscan_threshold=3, sources={"firewall": True, "suricata": False})
+            connection = store.db(cfg)
+            self.addCleanup(connection.close)
+            timestamp = ingest.parse_ts("2026-11-04T12:00:00+00:00", 0)
+            with patch("engine.time.time", return_value=timestamp), patch("proban.enforce.synctable") as sync:
+                for position, port in enumerate((21, 22, 23), 1):
+                    with open(path, "a") as handle:
+                        handle.write(self.line(port=port))
+                    with patch("builtins.print"):
+                        engine.run_cycle(cfg, connection, maintenance=False)
+                    self.assertEqual(sync.call_count, int(position == 3))
+            self.assertEqual(sync.call_args.args[0], cfg.pf_table)
+            self.assertEqual(set(sync.call_args.args[1]), {"203.0.113.7"})
+            self.assertTrue(sync.call_args.kwargs["additive"])
+            self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], 3)
+
+    def test_portscan_cleanup_retains_event_history(self):
+        cfg = make_cfg(detect_portscan=True)
+        connection = store.db(cfg)
+        self.addCleanup(connection.close)
+        for port, timestamp in ((21, 1000), (22, 1001)):
+            store.record_batch(cfg, connection, "203.0.113.7", "portscan", "TCP probe", timestamp, 1,
+                               scan_target=("192.0.2.1", "tcp", port))
+        store.decay_pass(cfg, connection, 1060)
+        self.assertEqual(connection.execute("SELECT port FROM scan_ports").fetchall(), [(22,)])
+        self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], 2)
+
+    def test_portscan_state_rolls_back_with_the_event(self):
+        cfg = make_cfg(detect_portscan=True)
+        connection = store.db(cfg)
+        self.addCleanup(connection.close)
+        with self.assertRaises(RuntimeError):
+            with connection:
+                store.record_batch(cfg, connection, "203.0.113.7", "portscan", "TCP probe", 1000, 1,
+                                   scan_target=("192.0.2.1", "tcp", 21))
+                raise RuntimeError("rollback")
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM scan_ports").fetchone()[0], 0)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], 0)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM offenders").fetchone()[0], 0)
+
+    def test_udp_and_tcp_scan_thresholds_do_not_mix(self):
+        cfg = make_cfg(scan_threshold=3)
+        connection = store.db(cfg)
+        self.addCleanup(connection.close)
+        for source in ("udp", "tcp-scan"):
+            self.assertFalse(store.record_batch(cfg, connection, "203.0.113.7", source, "probe", 1000, 2))
+        self.assertEqual(connection.execute("SELECT ban_secs FROM offenders").fetchone()[0], 0)
+
+    def test_pf_updates_retain_the_original_detection_reason(self):
+        cfg = make_cfg()
+        connection = store.db(cfg)
+        self.addCleanup(connection.close)
+        store.record(cfg, connection, "203.0.113.7", "firewall", "TCP SYN probe to 192.0.2.1:23", 1000)
+        for count in range(1, 10):
+            store.record_batch(cfg, connection, "203.0.113.7", "pf", f"{count} more packets blocked", 1000 + count, count)
+        reasons = connection.execute("SELECT reasons FROM offenders").fetchone()[0].splitlines()
+        self.assertIn("firewall:TCP SYN probe to 192.0.2.1:23", reasons)
+        self.assertEqual(sum(reason.startswith("pf:") for reason in reasons), 1)
+        self.assertIn("9 more packets blocked", reasons[-1])
+
+    def test_tarpit_udp_drops_are_counted_without_enabling_packet_logs(self):
+        for detector in (None, "detect_udp", "detect_portscan"):
+            with self.subTest(detector=detector):
+                enabled = detector is not None
+                cfg = make_cfg(dry_run=False, action="tarpit", tarpit_ip="10.66.66.10",
+                               tarpit_ip6="fd00:66::10", detect_udp=detector == "detect_udp",
+                               detect_portscan=detector == "detect_portscan")
+                connection = store.db(cfg)
+                self.addCleanup(connection.close)
+                for table in (cfg.pf_table, cfg.pf_table6):
+                    store.ss(connection, "pf_counters:" + table, "{}")
+                outputs = [subprocess.CompletedProcess([], 0, stdout=PfCounters.output(address, count))
+                           for address, count in (("203.0.113.7", 5), ("2001:db8:bad::7", 7))]
+                with patch("proban.enforce.subprocess.run", side_effect=outputs) as run:
+                    count = enforce.poll_counters(cfg, connection, 1000)
+                self.assertEqual(count, 12 if enabled else 0)
+                self.assertEqual(run.call_count, 2 if enabled else 0)
+                if enabled:
+                    self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], 12)
+
+
+class SuricataPriority(unittest.TestCase):
+    def ingest_alert(self, severity=1, signature_id=1001, **overrides):
+        alert = {"event_type": "alert", "timestamp": "2026-11-04T12:00:00+00:00",
+                 "src_ip": "203.0.113.7", "dest_ip": "192.0.2.1", "dest_port": 443, "proto": "TCP",
+                 "alert": {"severity": severity, "signature_id": signature_id, "signature": "Example exploit attempt"}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "eve.json")
+            with open(path, "w") as handle:
+                handle.write(json.dumps(alert) + "\n")
+            cfg = make_cfg(eve=path, grace_hits=20, **overrides)
+            connection = store.db(cfg)
+            self.addCleanup(connection.close)
+            pending = set()
+            ingest.ingest_suricata(cfg, connection, 1793793600, pending)
+            row = connection.execute("SELECT ban_secs,reasons,blocked_until FROM offenders WHERE ip='203.0.113.7'").fetchone()
+            return row, pending
+
+    def test_priority_minimum_is_wall_clock_time_at_different_decay_rates(self):
+        timestamp = ingest.parse_ts("2026-11-04T12:00:00+00:00", 0)
+        for amount in (30, 120):
+            with self.subTest(decay_amount=amount):
+                row, pending = self.ingest_alert(suricata_priority=True, decay_amount=amount, decay_interval=60)
+                self.assertEqual(row[2], timestamp + 1800)
+
+    def test_priority_bans_are_opt_in(self):
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                row, pending = self.ingest_alert(suricata_priority=enabled)
+                self.assertEqual(row[0], 900 if enabled else 0)
+                self.assertEqual(pending, {"203.0.113.7"} if enabled else set())
+
+    def test_priority_bans_filter_severity_and_signature_ids(self):
+        for severity, signature_id, expected in ((1, 1001, 900), (2, 1001, 0), (1, 2002, 0), ("invalid", 1001, 0)):
+            with self.subTest(severity=severity, signature_id=signature_id):
+                row, pending = self.ingest_alert(severity, signature_id, suricata_priority=True,
+                                                 suricata_priority_sids="1001, 1002")
+                self.assertEqual(row[0], expected)
+
+    def test_priority_bans_respect_the_configured_maximum(self):
+        row, pending = self.ingest_alert(suricata_priority=True, suricata_priority_secs=3600, max_ban_secs=600)
+        self.assertEqual(row[0], 600)
+        self.assertEqual(pending, {"203.0.113.7"})
+
+    def test_priority_bans_respect_allowlist_and_protected_ports(self):
+        row, pending = self.ingest_alert(suricata_priority=True, allowlist="203.0.113.7")
+        self.assertIsNone(row)
+        self.assertEqual(pending, set())
+        row, pending = self.ingest_alert(suricata_priority=True, protected_ports="443")
+        self.assertEqual(row[0], 0)
+        self.assertEqual(pending, set())
+
+    def test_reason_identifies_signature_severity_destination_and_priority(self):
+        row, pending = self.ingest_alert(suricata_priority=True)
+        for detail in ("SID 1001", "severity 1", "Example exploit attempt", "TCP", "192.0.2.1:443", "1800s"):
+            with self.subTest(detail=detail):
+                self.assertIn(detail, row[1])
 
 
 class PureMath(unittest.TestCase):
@@ -304,7 +647,8 @@ class PfCounters(unittest.TestCase):
         self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1120), 0)
         self.assertEqual(self.connection.execute("SELECT hits,last_seen FROM offenders").fetchone(), (250, 1060))
         self.assertEqual(self.connection.execute("SELECT COUNT(*),SUM(hits) FROM events").fetchone(), (1, 250))
-        self.assertIn("250 blocked packets", self.connection.execute("SELECT reason FROM events").fetchone()[0])
+        self.assertIn("250 additional incoming packets blocked by PF while the ban is active",
+                  self.connection.execute("SELECT reason FROM events").fetchone()[0])
 
     def test_new_entry_and_counter_resets_are_counted(self):
         enforce.poll_counters(self.cfg, self.connection, 1000)
@@ -562,6 +906,78 @@ class FastEnforcement(unittest.TestCase):
             enforce.enforce_pending(cfg, self.connection, 1000, {"203.0.113.7", "2001:db8::1"})
         targets = {call.args[0] for call in sync.call_args_list}
         self.assertEqual(targets, {cfg.pf_table_drop, cfg.pf_table_drop6})
+
+    def test_ipv6_aggregation_does_not_cover_allowlisted_hosts_or_subnets(self):
+        addresses = [f"2001:db8:bad::{index}" for index in range(1, 4)]
+        for allowlist in ("2001:db8:bad::100/128", "2001:db8:bad::100/120"):
+            for fast in (False, True):
+                with self.subTest(allowlist=allowlist, fast=fast):
+                    cfg = make_cfg(dry_run=False, allowlist=allowlist, v6_aggregate=3)
+                    for address in addresses:
+                        store.record(cfg, self.connection, address, "firewall", "probe", 1000)
+                    with patch("proban.enforce.synctable") as sync:
+                        if fast:
+                            enforce.enforce_pending(cfg, self.connection, 1000, set(addresses))
+                        else:
+                            enforce.enforce(cfg, self.connection, 1000)
+                    targets = {call.args[0]: set(call.args[1]) for call in sync.call_args_list}
+                    self.assertEqual(targets[cfg.pf_table6], set(addresses))
+                    self.assertFalse(any(rules.allowed(cfg, address) for address in targets[cfg.pf_table6]))
+
+    def test_safe_ipv6_aggregation_still_collapses_to_subnet(self):
+        addresses = [f"2001:db8:bad::{index}" for index in range(1, 4)]
+        cfg = make_cfg(dry_run=False, allowlist="2001:db8:beef::1", v6_aggregate=3)
+        for address in addresses:
+            store.record(cfg, self.connection, address, "firewall", "probe", 1000)
+        with patch("proban.enforce.synctable") as sync:
+            enforce.enforce_pending(cfg, self.connection, 1000, set(addresses))
+        targets = {call.args[0]: set(call.args[1]) for call in sync.call_args_list}
+        self.assertEqual(targets[cfg.pf_table6], {"2001:db8:bad::/64"})
+
+    def test_existing_unsafe_subnet_is_replaced_with_individual_hosts(self):
+        cfg = make_cfg(dry_run=False, allowlist="2001:db8:bad::100", v6_aggregate=3)
+        addresses = {f"2001:db8:bad::{index}" for index in range(1, 4)}
+        for address in addresses:
+            store.record(cfg, self.connection, address, "firewall", "probe", 1000)
+        tables = {cfg.pf_table: set(), cfg.pf_table_drop: set(), cfg.pf_table6: {"2001:db8:bad::/64"},
+                  cfg.pf_table_drop6: set()}
+        key = "pf_counters:" + cfg.pf_table6
+        store.ss(self.connection, key, '{"2001:db8:bad::/64":["old",100]}')
+
+        def run_pfctl(command, **kwargs):
+            table = tables[command[2]]
+            if command[4] == "show":
+                output = "\n".join(sorted(table))
+            else:
+                incoming = set(kwargs["input"].split())
+                if command[4] == "add":
+                    table.update(incoming)
+                else:
+                    table.difference_update(incoming)
+                output = ""
+            return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+        with patch("proban.enforce.subprocess.run", side_effect=run_pfctl):
+            enforce.enforce(cfg, self.connection, 1000)
+        self.assertEqual(tables[cfg.pf_table6], addresses)
+        self.assertEqual(set(json.loads(store.gs(self.connection, key))), addresses)
+
+    def test_blackhole_subnet_cannot_override_allowlist(self):
+        cfg = make_cfg(dry_run=False, allowlist="2001:db8:bad::100", v6_aggregate=3,
+                       action="tarpit", tarpit_ip="10.66.66.10", tarpit_ip6="fd00:66::10",
+                       post_max_action="blackhole")
+        addresses = {f"2001:db8:bad::{index}" for index in range(1, 4)}
+        for address in addresses:
+            store.record(cfg, self.connection, address, "firewall", "probe", 1000)
+        self.connection.execute("UPDATE offenders SET blackhole_until=2000")
+        for fast in (False, True):
+            with self.subTest(fast=fast), patch("proban.enforce.synctable") as sync:
+                if fast:
+                    enforce.enforce_pending(cfg, self.connection, 1000, addresses)
+                else:
+                    enforce.enforce(cfg, self.connection, 1000)
+            targets = {call.args[0]: set(call.args[1]) for call in sync.call_args_list}
+            self.assertEqual(targets[cfg.pf_table_drop6], addresses)
 
 
 class CounterIntegration(unittest.TestCase):

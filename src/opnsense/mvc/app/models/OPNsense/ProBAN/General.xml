@@ -19,6 +19,70 @@
             <Mask>/^[\s0-9,]*$/</Mask>
             <ValidationMessage>Comma or space separated list of ports to ignore for ProBAN (e.g. your OpenVPN TCP port or other services). Helps VPN and legitimate inbound TCP users avoid being treated as knocks.</ValidationMessage>
         </protected_ports>
+        <detect_syn type="BooleanField">
+            <Default>1</Default>
+            <Required>Y</Required>
+        </detect_syn>
+        <detect_udp type="BooleanField">
+            <Default>0</Default>
+            <Required>Y</Required>
+        </detect_udp>
+        <detect_tcp_scan type="BooleanField">
+            <Default>0</Default>
+            <Required>Y</Required>
+        </detect_tcp_scan>
+        <detect_tcp_invalid type="BooleanField">
+            <Default>0</Default>
+            <Required>Y</Required>
+        </detect_tcp_invalid>
+        <detect_portscan type="BooleanField">
+            <Default>0</Default>
+            <Required>Y</Required>
+        </detect_portscan>
+        <portscan_threshold type="IntegerField">
+            <Default>10</Default>
+            <MinimumValue>2</MinimumValue>
+            <MaximumValue>65535</MaximumValue>
+            <Required>Y</Required>
+        </portscan_threshold>
+        <portscan_window type="IntegerField">
+            <Default>60</Default>
+            <MinimumValue>1</MinimumValue>
+            <MaximumValue>3600</MaximumValue>
+            <Required>Y</Required>
+        </portscan_window>
+        <scan_threshold type="IntegerField">
+            <Default>5</Default>
+            <MinimumValue>1</MinimumValue>
+            <MaximumValue>1000</MaximumValue>
+            <Required>Y</Required>
+        </scan_threshold>
+        <scan_window type="IntegerField">
+            <Default>60</Default>
+            <MinimumValue>1</MinimumValue>
+            <MaximumValue>3600</MaximumValue>
+            <Required>Y</Required>
+        </scan_window>
+        <suricata_priority type="BooleanField">
+            <Default>0</Default>
+            <Required>Y</Required>
+        </suricata_priority>
+        <suricata_priority_severity type="IntegerField">
+            <Default>1</Default>
+            <MinimumValue>1</MinimumValue>
+            <MaximumValue>3</MaximumValue>
+            <Required>Y</Required>
+        </suricata_priority_severity>
+        <suricata_priority_secs type="IntegerField">
+            <Default>1800</Default>
+            <MinimumValue>60</MinimumValue>
+            <MaximumValue>315360000</MaximumValue>
+            <Required>Y</Required>
+        </suricata_priority_secs>
+        <suricata_priority_sids type="TextField">
+            <Mask>/^[\s0-9,]*$/</Mask>
+            <ValidationMessage>Comma or space separated Suricata signature IDs. Empty matches all signatures at the selected severity.</ValidationMessage>
+        </suricata_priority_sids>
         <grace_hits type="IntegerField">
             <Default>1</Default>
             <MinimumValue>1</MinimumValue>

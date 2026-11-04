@@ -28,6 +28,19 @@ class SettingsController extends ApiControllerBase
             "dry_run" => (int)((string)$mdl->dry_run),
             "wan_if" => (string)$mdl->wan_if,
             "protected_ports" => (string)$mdl->protected_ports,
+            "detect_syn" => ((string)$mdl->detect_syn === "0") ? 0 : 1,
+            "detect_udp" => (int)((string)$mdl->detect_udp),
+            "detect_tcp_scan" => (int)((string)$mdl->detect_tcp_scan),
+            "detect_tcp_invalid" => (int)((string)$mdl->detect_tcp_invalid),
+            "detect_portscan" => (int)((string)$mdl->detect_portscan),
+            "portscan_threshold" => (int)((string)$mdl->portscan_threshold) ?: 10,
+            "portscan_window" => (int)((string)$mdl->portscan_window) ?: 60,
+            "scan_threshold" => (int)((string)$mdl->scan_threshold) ?: 5,
+            "scan_window" => (int)((string)$mdl->scan_window) ?: 60,
+            "suricata_priority" => (int)((string)$mdl->suricata_priority),
+            "suricata_priority_severity" => (int)((string)$mdl->suricata_priority_severity) ?: 1,
+            "suricata_priority_secs" => (int)((string)$mdl->suricata_priority_secs) ?: 1800,
+            "suricata_priority_sids" => (string)$mdl->suricata_priority_sids,
             "grace_hits" => (int)((string)$mdl->grace_hits),
             "step_secs" => (int)((string)$mdl->step_secs),
             "multiplier" => (float)((string)$mdl->multiplier),
@@ -66,6 +79,19 @@ class SettingsController extends ApiControllerBase
         $mdl->dry_run = $req->getPost("dry_run", "int", 1) ? "1" : "0";
         $mdl->wan_if = trim((string)$req->getPost("wan_if", "string", ""));
         $mdl->protected_ports = trim((string)$req->getPost("protected_ports", "string", ""));
+        $mdl->detect_syn = $req->getPost("detect_syn", "int", ((string)$mdl->detect_syn === "0") ? 0 : 1) ? "1" : "0";
+        $mdl->detect_udp = $req->getPost("detect_udp", "int", (int)((string)$mdl->detect_udp)) ? "1" : "0";
+        $mdl->detect_tcp_scan = $req->getPost("detect_tcp_scan", "int", (int)((string)$mdl->detect_tcp_scan)) ? "1" : "0";
+        $mdl->detect_tcp_invalid = $req->getPost("detect_tcp_invalid", "int", (int)((string)$mdl->detect_tcp_invalid)) ? "1" : "0";
+        $mdl->detect_portscan = $req->getPost("detect_portscan", "int", (int)((string)$mdl->detect_portscan)) ? "1" : "0";
+        $mdl->portscan_threshold = (string)max(2, (int)$req->getPost("portscan_threshold", "int", (int)((string)$mdl->portscan_threshold) ?: 10));
+        $mdl->portscan_window = (string)max(1, (int)$req->getPost("portscan_window", "int", (int)((string)$mdl->portscan_window) ?: 60));
+        $mdl->scan_threshold = (string)max(1, (int)$req->getPost("scan_threshold", "int", (int)((string)$mdl->scan_threshold) ?: 5));
+        $mdl->scan_window = (string)max(1, (int)$req->getPost("scan_window", "int", (int)((string)$mdl->scan_window) ?: 60));
+        $mdl->suricata_priority = $req->getPost("suricata_priority", "int", (int)((string)$mdl->suricata_priority)) ? "1" : "0";
+        $mdl->suricata_priority_severity = (string)max(1, (int)$req->getPost("suricata_priority_severity", "int", (int)((string)$mdl->suricata_priority_severity) ?: 1));
+        $mdl->suricata_priority_secs = (string)max(60, (int)$req->getPost("suricata_priority_secs", "int", (int)((string)$mdl->suricata_priority_secs) ?: 1800));
+        $mdl->suricata_priority_sids = trim((string)$req->getPost("suricata_priority_sids", "string", (string)$mdl->suricata_priority_sids));
         $mdl->grace_hits = (string)max(1, (int)$req->getPost("grace_hits", "int", 1));
         $mdl->step_secs = (string)max(1, (int)$req->getPost("step_secs", "int", 30));
         $mult = (float)$req->getPost("multiplier", null, "1.5");

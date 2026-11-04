@@ -94,7 +94,10 @@ class OverviewController extends \OPNsense\Base\ApiControllerBase
             $rows = [];
             while ($x = $r->fetchArray(SQLITE3_ASSOC)) {
                 $l = array_values(array_filter(explode("\n", (string)$x['reasons'])));
-                $x['last_reason'] = count($l) ? end($l) : "";
+                $detected = array_values(array_filter($l, static function ($reason) {
+                    return strpos($reason, "pf:") !== 0;
+                }));
+                $x['last_reason'] = count($detected) ? end($detected) : (count($l) ? end($l) : "");
                 $x['ban_secs'] = (int)round($x['ban_secs']);
                 unset($x['reasons']); $rows[] = $x;
             }

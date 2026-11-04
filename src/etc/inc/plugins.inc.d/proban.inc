@@ -74,9 +74,9 @@ function proban_register_tarpit(Plugin $fw, $ipprotocol, $from_alias, $target, a
     }
 }
 
-function proban_register_block(Plugin $fw, $ipprotocol, $from_alias, $descr)
+function proban_register_block(Plugin $fw, $ipprotocol, $from_alias, $descr, $protocol = null)
 {
-    $fw->registerFilterRule(0, array(
+    $rule = array(
         'ipprotocol' => $ipprotocol,
         'descr'      => $descr,
         'from'       => $from_alias,
@@ -84,17 +84,24 @@ function proban_register_block(Plugin $fw, $ipprotocol, $from_alias, $descr)
         'type'       => 'block',
         'log'        => false,
         'quick'      => true,
-    ));
+    );
+    if ($protocol !== null) {
+        $rule['protocol'] = $protocol;
+    }
+    $fw->registerFilterRule(0, $rule);
 }
 
 // Apply ProBAN's rules for a single address family: rdr+pass into the tarpit (plus the
 // post-max blackhole drop) when a private target is set, otherwise a plain block.
 function proban_apply_family(Plugin $fw, $ipprotocol, $proto, $block_alias, $block_descr,
-                             $drop_alias, $drop_descr, $tarpit_ok, $target, array $ports, $blackhole)
+                             $drop_alias, $drop_descr, $tarpit_ok, $target, array $ports, $blackhole, $block_udp = false)
 {
     proban_add_alias_if_not_exist($block_alias, $block_descr . ' (populated by the engine)', $proto);
     if ($tarpit_ok) {
         proban_register_tarpit($fw, $ipprotocol, '<' . $block_alias . '>', $target, $ports);
+        if ($block_udp) {
+            proban_register_block($fw, $ipprotocol, '<' . $block_alias . '>', $block_descr . ' (UDP)', 'udp');
+        }
         if ($blackhole) {
             proban_add_alias_if_not_exist($drop_alias, $drop_descr . ' (populated by the engine)', $proto);
             proban_register_block($fw, $ipprotocol, '<' . $drop_alias . '>', $drop_descr);
@@ -122,6 +129,7 @@ function proban_firewall(Plugin $fw)
     $action = $general['action'] ?? 'drop';
     $ports = Helper::parsePorts($general['tarpit_ports'] ?? '');
     $blackhole = (($general['post_max_action'] ?? 'hold') === 'blackhole');
+    $block_udp = (($general['detect_udp'] ?? '0') === '1' || ($general['detect_portscan'] ?? '0') === '1');
     $can_tarpit = (!$dry_run && $action === 'tarpit');
 
     // IPv4
@@ -130,7 +138,7 @@ function proban_firewall(Plugin $fw)
         $fw, 'inet', 'IPv4',
         'parabolic_block', 'ProBAN block',
         'parabolic_drop', 'ProBAN blackhole (post-max drop)',
-        $can_tarpit && Helper::isPrivateTarget($tarpit_ip), $tarpit_ip, $ports, $blackhole
+        $can_tarpit && Helper::isPrivateTarget($tarpit_ip), $tarpit_ip, $ports, $blackhole, $block_udp
     );
 
     // IPv6 -- identical treatment; tarpit/honeypot only when a private v6 target is set.
@@ -139,7 +147,7 @@ function proban_firewall(Plugin $fw)
         $fw, 'inet6', 'IPv6',
         'parabolic_block6', 'ProBAN block (IPv6)',
         'parabolic_drop6', 'ProBAN blackhole IPv6 (post-max drop)',
-        $can_tarpit && Helper::isPrivateTarget($tarpit_ip6), $tarpit_ip6, $ports, $blackhole
+        $can_tarpit && Helper::isPrivateTarget($tarpit_ip6), $tarpit_ip6, $ports, $blackhole, $block_udp
     );
 }
 

@@ -7,6 +7,19 @@
   "eve": "/var/log/suricata/eve.json",
   "wan_if": {{ OPNsense.proban.general.wan_if|default("")|tojson }},
   "protected_ports": {{ OPNsense.proban.general.protected_ports|default("")|tojson }},
+  "detect_syn": {% if OPNsense.proban.general.detect_syn|default("1") == "1" %}true{% else %}false{% endif %},
+  "detect_udp": {% if OPNsense.proban.general.detect_udp|default("0") == "1" %}true{% else %}false{% endif %},
+  "detect_tcp_scan": {% if OPNsense.proban.general.detect_tcp_scan|default("0") == "1" %}true{% else %}false{% endif %},
+  "detect_tcp_invalid": {% if OPNsense.proban.general.detect_tcp_invalid|default("0") == "1" %}true{% else %}false{% endif %},
+  "detect_portscan": {% if OPNsense.proban.general.detect_portscan|default("0") == "1" %}true{% else %}false{% endif %},
+  "portscan_threshold": {{ OPNsense.proban.general.portscan_threshold|default("10", true) }},
+  "portscan_window": {{ OPNsense.proban.general.portscan_window|default("60", true) }},
+  "scan_threshold": {{ OPNsense.proban.general.scan_threshold|default("5", true) }},
+  "scan_window": {{ OPNsense.proban.general.scan_window|default("60", true) }},
+  "suricata_priority": {% if OPNsense.proban.general.suricata_priority|default("0") == "1" %}true{% else %}false{% endif %},
+  "suricata_priority_severity": {{ OPNsense.proban.general.suricata_priority_severity|default("1", true) }},
+  "suricata_priority_secs": {{ OPNsense.proban.general.suricata_priority_secs|default("1800", true) }},
+  "suricata_priority_sids": {{ OPNsense.proban.general.suricata_priority_sids|default("")|tojson }},
   "pf_table": "parabolic_block",
   "pf_table_drop": "parabolic_drop",
   "pf_table6": "parabolic_block6",
@@ -34,5 +47,5 @@
   "blackhole_decay": {{ OPNsense.proban.general.blackhole_decay|default("7200", true) }}
 }
 {% else %}
-{"enabled": false, "dry_run": true, "db": "/var/log/parabolic/offenders.db", "fwlog": "/var/log/filter/latest.log", "eve": "/var/log/suricata/eve.json", "wan_if": "", "protected_ports": "", "pf_table": "parabolic_block", "allowlist": "", "grace_hits": 1, "step_secs": 30, "multiplier": 1.5, "max_ban_secs": 2592000, "decay_amount": 30, "decay_interval": 60, "event_retention_days": 14, "offender_amnesia_days": 30, "sources": {"firewall": true, "suricata": true}, "action": "drop", "tarpit_ip": "", "tarpit_ports": ""}
+{"enabled": false, "dry_run": true, "db": "/var/log/parabolic/offenders.db", "fwlog": "/var/log/filter/latest.log", "eve": "/var/log/suricata/eve.json", "wan_if": "", "protected_ports": "", "detect_syn": true, "detect_udp": false, "detect_tcp_scan": false, "detect_tcp_invalid": false, "detect_portscan": false, "portscan_threshold": 10, "portscan_window": 60, "scan_threshold": 5, "scan_window": 60, "pf_table": "parabolic_block", "allowlist": "", "grace_hits": 1, "step_secs": 30, "multiplier": 1.5, "max_ban_secs": 2592000, "decay_amount": 30, "decay_interval": 60, "event_retention_days": 14, "offender_amnesia_days": 30, "sources": {"firewall": true, "suricata": true}, "action": "drop", "tarpit_ip": "", "tarpit_ports": ""}
 {% endif %}

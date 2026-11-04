@@ -80,42 +80,74 @@ def ingest_fwlog(cfg, c, now, pending=None):
         ets = parse_ts(sp[1], now) if len(sp) > 1 else now
         i = line.rfind("] ")
         p2 = (line[i + 2:] if i >= 0 else line).split(",")
-        if len(p2) < 9 or p2[4] != cfg.wan_if:
+        if (len(p2) < 9 or p2[4] != cfg.wan_if or p2[7] != "in"
+                or p2[6] not in ("block", "pass")):
             continue
         ver = p2[8]
-        dst = ''
         if ver == "4":
-            if len(p2) < 24 or p2[16] != "tcp" or p2[23].strip() != "S":
+            if len(p2) < 23:
                 continue
-            src = p2[18]
-            dst = p2[19] if len(p2) > 19 else ''
-            dport = p2[21]
+            protocol, src, dst, dport = p2[16], p2[18], p2[19], p2[21]
+            flag_index = 23
         elif ver == "6":
-            if len(p2) < 21 or p2[12] != "tcp" or p2[20].strip() != "S":
+            if len(p2) < 20:
                 continue
-            src = p2[15]
-            dst = p2[16]
-            dport = p2[18]
+            protocol, src, dst, dport = p2[12], p2[15], p2[16], p2[18]
+            flag_index = 20
         else:
             continue
         if not src or rules.allowed(cfg, src):
             continue
 
         dport_int = int(dport) if str(dport).strip().isdigit() else -1
-        if dport_int in cfg.protected_port_set:
+        if not 1 <= dport_int <= 65535 or dport_int in cfg.protected_port_set:
             continue
 
+        source = "firewall"
+        if protocol == "udp":
+            if p2[6] != "block":
+                continue
+            detected = cfg.detect_udp
+            probe = "UDP probe"
+            source = "udp"
+        elif protocol == "tcp" and len(p2) > flag_index:
+            flags = p2[flag_index].strip()
+            if flags == "S":
+                detected = cfg.detect_syn
+                probe = "TCP SYN probe"
+            elif p2[6] == "block":
+                flag_set = frozenset(flags)
+                if "S" in flag_set and ("F" in flag_set or "R" in flag_set):
+                    scan = "SYN" + ("+FIN" if "F" in flag_set else "") + ("+RST" if "R" in flag_set else "")
+                    detected = cfg.detect_tcp_invalid
+                    source = "tcp-invalid"
+                else:
+                    scan = {frozenset(): "NULL", frozenset("F"): "FIN", frozenset("FPU"): "XMAS"}.get(flag_set)
+                    if scan is None:
+                        continue
+                    detected = cfg.detect_tcp_scan
+                    source = "tcp-scan"
+                probe = f"TCP {scan} scan (flags {flags or 'none'})"
+            else:
+                continue
+        else:
+            continue
+        if not detected and not (cfg.detect_portscan and p2[6] == "block"):
+            continue
+        destination = f"[{dst}]:{dport_int}" if ver == "6" else f"{dst}:{dport_int}"
         if p2[6] == "pass":
             if cfg.action != 'tarpit':
                 continue
             target = cfg.tarpit_ip6 if ver == "6" else cfg.tarpit_ip
-            if target and dst != target:
+            if not target or dst != target:
                 continue
             if cfg.tarpit_port_set and dport_int not in cfg.tarpit_port_set:
                 continue
-            events.append((src, "tarpit", f"tarpit knock :{dport}", ets))
+            events.append((src, "tarpit", f"tarpit knock: {probe} to {destination} on {cfg.wan_if}", ets))
         else:
-            events.append((src, "firewall", f"SYN probe :{dport}", ets))
+            scan_target = (dst, protocol, dport_int) if cfg.detect_portscan else None
+            events.append((src, source if detected else "portscan",
+                           f"{probe} to {destination} blocked on {cfg.wan_if}", ets, 0, scan_target))
     return store.record_many(cfg, c, events, pending)
 
 
@@ -133,5 +165,32 @@ def ingest_suricata(cfg, c, now, pending=None):
                 continue
             ets = parse_ts(e.get("timestamp", ""), now)
             if ip and not rules.allowed(cfg, ip):
-                events.append((ip, "suricata", f"[sev{a.get('severity', 3)}] {str(a.get('signature', ''))[:60]}", ets))
+                try:
+                    severity = int(a.get("severity", 0))
+                except (TypeError, ValueError):
+                    severity = 0
+                if severity not in (1, 2, 3):
+                    severity = 0
+                try:
+                    signature_id = int(a.get("signature_id", 0))
+                except (TypeError, ValueError):
+                    signature_id = 0
+                signature = str(a.get("signature") or "Unknown signature").replace("\n", " ").replace("\r", " ")[:120]
+                reason = f"Suricata alert: {signature} (SID {signature_id or 'unknown'}, severity {severity or 'unknown'})"
+                destination = str(e.get("dest_ip") or "unknown")[:64]
+                if ":" in destination:
+                    destination = f"[{destination}]"
+                try:
+                    port = int(e.get("dest_port", 0))
+                except (TypeError, ValueError):
+                    port = 0
+                protocol = str(e.get("proto") or "unknown").upper()[:16]
+                reason += f"; {protocol} to {destination}:{port or 'unknown'}"
+                minimum_ban = 0
+                if (cfg.suricata_priority and severity and severity <= cfg.suricata_priority_severity
+                        and (not cfg.suricata_priority_sids or signature_id in cfg.suricata_priority_sids)
+                        and port not in cfg.protected_port_set):
+                    minimum_ban = min(cfg.maxban, cfg.suricata_priority_secs * cfg.damt / cfg.dint)
+                    reason += f"; priority minimum {int(minimum_ban * cfg.dint / cfg.damt)}s"
+                events.append((ip, "suricata", reason, ets, minimum_ban))
     return store.record_many(cfg, c, events, pending)
