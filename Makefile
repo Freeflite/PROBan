@@ -1,7 +1,7 @@
 # OPNsense plugin: ProBAN. Drops into opnsense/plugins/security/proban/.
 
 PLUGIN_NAME=		proban
-PLUGIN_VERSION=		0.1.0
+PLUGIN_VERSION=		0.1.1
 PLUGIN_COMMENT=		Progressive/parabolic banning of abusive IPs, with tarpit & honeypot
 PLUGIN_MAINTAINER=	83433431+Freeflite@users.noreply.github.com
 PLUGIN_WWW=		https://github.com/Freeflite/PROBan
