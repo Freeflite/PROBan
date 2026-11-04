@@ -82,8 +82,14 @@ def poll_counters(cfg, connection, now):
     return sum(counts.values())
 
 
-def synctable(table, ips, connection=None):
-    cur = subprocess.run(["pfctl", "-t", table, "-T", "show"], capture_output=True, text=True).stdout.split()
+def synctable(table, ips, connection=None, additive=False):
+    cur = set(subprocess.run(["pfctl", "-t", table, "-T", "show"],
+                             capture_output=True, text=True, check=True, timeout=10).stdout.split())
+    desired = set(ips)
+    additions = desired - cur
+    removals = set() if additive else cur - desired
+    if not additions and not removals:
+        return
     key = "pf_counters:" + table
     try:
         snapshot = json.loads(store.gs(connection, key, "{}")) if connection is not None else {}
@@ -91,18 +97,18 @@ def synctable(table, ips, connection=None):
         snapshot = {}
     if not isinstance(snapshot, dict):
         snapshot = {}
-    changed = False
-    for ip in set(ips) - set(cur):
-        result = subprocess.run(["pfctl", "-t", table, "-T", "add", ip])
-        if result.returncode == 0:
-            snapshot[ip] = [None, 0]
-            changed = True
-    for ip in set(cur) - set(ips):
-        result = subprocess.run(["pfctl", "-t", table, "-T", "delete", ip])
-        if result.returncode == 0:
-            snapshot.pop(ip, None)
-            changed = True
-    if connection is not None and changed:
+    for operation, addresses in (("add", additions), ("delete", removals)):
+        if not addresses:
+            continue
+        subprocess.run(["pfctl", "-t", table, "-T", operation, "-f", "-"],
+                       input="\n".join(sorted(addresses)) + "\n",
+                       capture_output=True, text=True, check=True, timeout=10)
+        for address in addresses:
+            if operation == "add":
+                snapshot[address] = [None, 0]
+            else:
+                snapshot.pop(address, None)
+    if connection is not None:
         store.ss(connection, key, json.dumps(snapshot))
 
 
@@ -122,17 +128,7 @@ def rdr_target(table):
     return None
 
 
-def enforce(cfg, c, now):
-    """Route every active offender to the right pf table by address family and state.
-
-    Returns (active, dropped, v6, mode):
-      active  -- every enforced offender (both families)
-      dropped -- everything sent to a blackhole (drop) set, v4 + v6
-      v6      -- every v6 entry pushed (tarpit + blackhole, after /64 aggregation)
-    """
-    rows = [(ip, (bh or 0)) for ip, bh in
-            c.execute("SELECT ip,blackhole_until FROM offenders WHERE ban_secs>0").fetchall()
-            if not rules.allowed(cfg, ip)]
+def table_plan(cfg, rows, now):
     v4 = [(ip, bh) for ip, bh in rows if ":" not in ip]
     v6 = [(ip, bh) for ip, bh in rows if ":" in ip]
 
@@ -160,11 +156,39 @@ def enforce(cfg, c, now):
     active = [ip for ip, bh in rows]
     dropped = v4_drop + v6_drop
     v6_all = v6_keep + v6_drop
+    tables = ((cfg.pf_table, v4_keep), (cfg.pf_table_drop, v4_drop),
+              (cfg.pf_table6, v6_keep), (cfg.pf_table_drop6, v6_drop))
+    return active, dropped, v6_all, tables
+
+
+def enforce_pending(cfg, connection, now, pending):
+    if not cfg.enabled or cfg.dry_run or not pending:
+        return
+    addresses = sorted(pending)
+    rows = []
+    for start in range(0, len(addresses), 400):
+        selected = addresses[start:start + 400]
+        placeholders = ",".join("?" for address in selected)
+        query = ("SELECT ip,blackhole_until FROM offenders WHERE ban_secs>0 AND blocked_until>? "
+                 f"AND ip IN ({placeholders})")
+        rows.extend((ip, bh or 0) for ip, bh in connection.execute(query, [now] + selected)
+                    if not rules.allowed(cfg, ip))
+    active, dropped, v6_all, tables = table_plan(cfg, rows, now)
+    snapshots = connection if cfg.sources.get("firewall", True) else None
+    for table, addresses in tables:
+        if addresses:
+            synctable(table, addresses, snapshots, additive=True)
+
+
+def enforce(cfg, c, now):
+    """Return active, dropped, IPv6 entries and mode after a full table reconciliation."""
+    rows = [(ip, bh or 0) for ip, bh in
+            c.execute("SELECT ip,blackhole_until FROM offenders WHERE ban_secs>0").fetchall()
+            if not rules.allowed(cfg, ip)]
+    active, dropped, v6_all, tables = table_plan(cfg, rows, now)
     if cfg.dry_run:
         return active, dropped, v6_all, "DRY-RUN"
     snapshots = c if cfg.sources.get("firewall", True) else None
-    synctable(cfg.pf_table, v4_keep, snapshots)
-    synctable(cfg.pf_table_drop, v4_drop, snapshots)
-    synctable(cfg.pf_table6, v6_keep, snapshots)
-    synctable(cfg.pf_table_drop6, v6_drop, snapshots)
+    for table, addresses in tables:
+        synctable(table, addresses, snapshots)
     return active, dropped, v6_all, "enforced"

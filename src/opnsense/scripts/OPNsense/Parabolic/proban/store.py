@@ -1,6 +1,7 @@
 # SQLite offender/event store + the record and decay operations.
 import os
 import sqlite3
+from itertools import groupby
 
 from . import rules
 
@@ -39,6 +40,18 @@ def record(cfg, c, ip, src, reason, ets):
     record_batch(cfg, c, ip, src, reason, ets, 1)
 
 
+def record_many(cfg, connection, events, pending=None):
+    total = 0
+    for event, matching in groupby(events):
+        ip, source, reason, timestamp = event
+        count = sum(1 for entry in matching)
+        newly_active = record_batch(cfg, connection, ip, source, reason, timestamp, count)
+        if newly_active and pending is not None:
+            pending.add(ip)
+        total += count
+    return total
+
+
 def record_batch(cfg, c, ip, src, reason, ets, count):
     if count <= 0 or rules.allowed(cfg, ip):
         return
@@ -56,6 +69,7 @@ def record_batch(cfg, c, ip, src, reason, ets, count):
         bh = 0
         ban = 0.0
         reasons = ""
+    was_active = ban > 0
     hits = previous_hits + count
     # while serving the blackhole, escalation is frozen -- they're being dropped, we just bleed them down
     frozen = (cfg.blackhole_on and bh > ets)
@@ -73,6 +87,7 @@ def record_batch(cfg, c, ip, src, reason, ets, count):
     rl = [x for x in reasons.split("\n") if x][-4:] + [f"{src}:{reason}"]
     c.execute("INSERT OR REPLACE INTO offenders VALUES(?,?,?,?,?,?,?,?,?,?)",
               (ip, hits, first, ets, ban, ets, rules.wall_until(cfg, ets, ban), rules.level_of(ban), "\n".join(rl[-5:]), bh))
+    return ban > 0 and not was_active
 
 
 def decay_pass(cfg, c, now):

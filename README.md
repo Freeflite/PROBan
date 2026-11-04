@@ -28,7 +28,7 @@ That's the "parabolic" shape: accelerating up under active attack, linear decay 
 
 ProBAN's drop rules run before CrowdSec and ordinary user filter rules and do not log individual packets. Initial detection still uses logged WAN TCP SYN probes and optional Suricata alerts. Once an address is blocked, the engine reads its incoming block counter from PF and stores one weighted event per address and cycle instead of one database event per packet. Tarpit/honeypot pass traffic continues to use the existing log-based detection; blackhole drops use counters.
 
-The dashboard's **Hits**, **Last seen**, 24-hour total, timeline and per-address history include these batches. For example, 250 more dropped packets add 250 hits and one history row with source `pf`. Collection normally runs every 60 seconds and the dashboard refreshes every 30 seconds. PF does not supply ports, TCP flags or individual packet times here: last-seen and batch timestamps indicate collection time. These counters include all incoming dropped packets from already-banned addresses, not just TCP SYN probes. Protected ports still exclude initial probes and tarpit knocks; they cannot be separated from an address's aggregate drop counter.
+The dashboard's **Hits**, **Last seen**, 24-hour total, timeline and per-address history include these batches. For example, 250 more dropped packets add 250 hits and one history row with source `pf`. PF counter collection normally runs every 60 seconds and the dashboard refreshes every 30 seconds; initial log-based detection now has a separate fast path described below. PF does not supply ports, TCP flags or individual packet times here: last-seen and batch timestamps indicate collection time. These counters include all incoming dropped packets from already-banned addresses, not just TCP SYN probes. Protected ports still exclude initial probes and tarpit knocks; they cannot be separated from an address's aggregate drop counter.
 
 IPv6 `/64` counters are shown as separate subnet-total rows rather than attributing unknown packets to individual hosts. Existing history is retained during the database migration. The first snapshot of a pre-existing table is a baseline, not a replay of earlier traffic; subsequent counter changes and resets are tracked. If counters cannot be read, the dashboard warns and existing bans/tables are retained until collection recovers.
 
@@ -40,6 +40,8 @@ configctl proban run
 ```
 
 Existing database rows and service settings do not need resetting. Native PF behavior still needs verification on the target OPNsense appliance; local automated tests use FreeBSD-format counter fixtures.
+
+When upgrading from the older periodic supervisor, also run `configctl proban restart` after package installation to activate the persistent service. `configctl proban run` remains a bounded, single full cycle; it does not start the service.
 
 ## What happens to a banned IP — three actions, one setting
 
@@ -174,6 +176,22 @@ IPv6 is fully supported for tarpit/honeypot/blackhole (including pass/in knock d
 Set the WAN interface to your physical untrusted uplink (not a WireGuard interface). VPN tunnel client IPs (private ranges or CGNAT) are protected by the built-in SAFETY ranges + your allowlist. See `proban/config.py:SAFETY`.
 
 The Protected ports field appears in Settings under "Detection sources" (alongside the WAN interface field). The offenders table above the dashboard also has an IPv4/IPv6/Both filter and pagination controls (25/50/100/custom/ALL) that preserve column sorting.
+
+## Efficient PF table updates
+
+Each table synchronization reads the live table once, then sends added and removed addresses in at most two batches through `pfctl -T add/delete -f -`. For example, 1,000 additions and 1,000 removals need three processes instead of 2,001. Unchanged tables need only the read, with no table or counter-snapshot writes. Existing addresses and their packet-counter baselines are retained rather than flushing and rebuilding the table.
+
+Every synchronization command has a 10-second timeout and checks its exit status. A failed command aborts the cycle instead of recording the synchronization as successful. PF operations that have already succeeded are not rolled back; the next cycle reads the live table again and reconciles remaining changes. These paths are regression-tested with mocked PF commands, not a measured appliance performance benchmark.
+
+## Fast detection and load limits
+
+The service keeps one Python process and database connection alive. Native BSD `kqueue` notifications wake it for log and configuration changes, with a one-second fallback check for missed notifications or unsupported platforms. Detection batches run at most once per second; a new ban is added through a non-destructive PF batch without waiting for full maintenance. The configured grace threshold, protected ports, allowlist and dry-run mode still apply. Full counter collection, decay, retention cleanup, IPv6 aggregation and table reconciliation normally run every 60 seconds. `PROBAN_INTERVAL` changes this maintenance interval, not the fast detection cadence. No PF states are killed.
+
+Each source reads at most 1,000 records, 1 MiB, or approximately 250 ms of reading/parsing per batch, whichever limit is reached first. Database writes and PF commands complete separately, so this is not a hard CPU quota or a guaranteed one-second blocking latency under load. Consecutive identical events with the same address, source, reason and timestamp share one weighted database row; distinct timestamps are retained. The next batch resumes at the saved byte cursor, committed with its events. A remaining backlog is reported as `backlog=...B` in the service log.
+
+Incomplete lines wait for their terminating newline. Records over 64 KiB are discarded incrementally, with discarded-record totals in SQLite state (`fw_offset_oversized` and `eve_offset_oversized`). File identity changes and truncation restart reading at the beginning of the current log. Backlogs continue without requiring another file-change notification, but unread data removed by log rotation cannot be recovered. Persistently higher input rates can therefore still exceed the processing and retention capacity.
+
+The service is managed with the existing `configctl proban start|stop|restart|status` actions; `daemon(8)` forwards its output to syslog under `proban`. Local tests exercise native file notifications, bounded processing, simulated PF updates and a real unprivileged daemon's SIGTERM shutdown. FreeBSD service integration and attack-load performance still require verification on the target appliance.
 
 ## Testing
 
