@@ -68,6 +68,10 @@
             <MaximumValue>3650</MaximumValue>
             <Required>Y</Required>
         </offender_amnesia_days>
+        <hide_expired type="BooleanField">
+            <Default>0</Default>
+            <Required>Y</Required>
+        </hide_expired>
         <src_firewall type="BooleanField">
             <Default>1</Default>
             <Required>Y</Required>

@@ -8,15 +8,20 @@ dry_run, which skips pfctl).
 Run:  python -m unittest discover -s tests      (or: python tests/test_engine.py)
 """
 import os
+import json
+import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "..", "src", "opnsense", "scripts", "OPNsense", "Parabolic")))
 
 from proban import aggregate, config, enforce, ingest, rules, store   # noqa: E402
+import engine   # noqa: E402
 
 
 def make_cfg(**overrides):
@@ -154,6 +159,298 @@ class BanGrowth(unittest.TestCase):
         c = store.db(cfg)
         store.record(cfg, c, "203.0.113.9", "t", "probe", 1000)
         self.assertIsNone(c.execute("SELECT 1 FROM offenders WHERE ip=?", ("203.0.113.9",)).fetchone())
+
+
+class StoreIndexes(unittest.TestCase):
+    def test_event_queries_use_indexes(self):
+        connection = store.db(make_cfg())
+        self.addCleanup(connection.close)
+        queries = (
+            ("SELECT SUM(hits) FROM events WHERE ts >= ? AND ts < ?", (1000, 2000), "events_ts"),
+            ("SELECT ts,source,reason,hits FROM events WHERE ip=? ORDER BY ts DESC,rowid DESC LIMIT 100",
+             ("203.0.113.7",), "events_ip_ts"),
+            ("DELETE FROM events WHERE ts < ?", (1000,), "events_ts"),
+        )
+        for query, parameters, index in queries:
+            with self.subTest(query=query):
+                plan = " ".join(row[3] for row in connection.execute("EXPLAIN QUERY PLAN " + query, parameters))
+                self.assertIn(index, plan)
+                self.assertNotIn("SCAN events", plan)
+                self.assertNotIn("TEMP B-TREE", plan)
+
+    def test_existing_database_is_indexed_without_changing_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "offenders.db")
+            with sqlite3.connect(path) as old:
+                old.execute("CREATE TABLE events(ts INT,ip TEXT,source TEXT,reason TEXT)")
+                old.execute("INSERT INTO events VALUES(1000,'203.0.113.7','firewall','original')")
+                plan = " ".join(row[3] for row in old.execute("EXPLAIN QUERY PLAN SELECT * FROM events WHERE ts > 0"))
+                self.assertIn("SCAN events", plan)
+            for attempt in range(2):
+                connection = store.db(make_cfg(db=path))
+                self.assertEqual(connection.execute("SELECT ts,ip,source,reason,hits FROM events").fetchall(),
+                                 [(1000, "203.0.113.7", "firewall", "original", 1)])
+                indexes = {row[1] for row in connection.execute("PRAGMA index_list(events)")}
+                self.assertEqual(indexes, {"events_ts", "events_ip_ts"})
+                connection.commit()
+                connection.close()
+
+
+class BatchedHits(unittest.TestCase):
+    def test_batch_matches_repeated_hits_and_writes_one_event(self):
+        for multiplier in (1.0, 1.5, 2.0):
+            with self.subTest(multiplier=multiplier):
+                cfg = make_cfg(grace_hits=3, multiplier=multiplier)
+                repeated = store.db(cfg)
+                batched = store.db(cfg)
+                self.addCleanup(repeated.close)
+                self.addCleanup(batched.close)
+                for connection in (repeated, batched):
+                    store.record(cfg, connection, "203.0.113.7", "firewall", "probe", 1000)
+                for hit in range(8):
+                    store.record(cfg, repeated, "203.0.113.7", "pf", "blocked", 1060)
+                store.record_batch(cfg, batched, "203.0.113.7", "pf", "blocked", 1060, 8)
+                query = "SELECT hits,ban_secs,last_seen,blocked_until FROM offenders"
+                self.assertEqual(repeated.execute(query).fetchone(), batched.execute(query).fetchone())
+                self.assertEqual(batched.execute("SELECT COUNT(*) FROM events").fetchone()[0], 2)
+
+    def test_large_batch_is_capped_and_stored_once(self):
+        cfg = make_cfg(max_ban_secs=5000)
+        connection = store.db(cfg)
+        self.addCleanup(connection.close)
+        store.record_batch(cfg, connection, "203.0.113.8", "pf", "blocked", 1000, 1000000)
+        self.assertEqual(connection.execute("SELECT hits,ban_secs FROM offenders").fetchone(), (1000000, 5000))
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], 1)
+        self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], 1000000)
+
+    def test_existing_events_are_migrated_without_losing_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "offenders.db")
+            with sqlite3.connect(path) as old:
+                old.execute("CREATE TABLE events(ts INT,ip TEXT,source TEXT,reason TEXT)")
+                old.execute("INSERT INTO events VALUES(1000,'203.0.113.7','firewall','original')")
+            cfg = make_cfg(db=path)
+            connection = store.db(cfg)
+            store.record_batch(cfg, connection, "203.0.113.7", "pf", "blocked", 1060, 250)
+            self.assertEqual(connection.execute("SELECT COUNT(*),SUM(hits) FROM events").fetchone(), (2, 251))
+            connection.commit()
+            connection.close()
+            connection = store.db(cfg)
+            self.assertEqual(connection.execute("SELECT reason,hits FROM events ORDER BY ts").fetchall(),
+                             [("original", 1), ("blocked", 250)])
+            connection.close()
+
+    def test_batch_respects_blackhole_freeze(self):
+        cfg = make_cfg(action="tarpit", post_max_action="blackhole", blackhole_decay=3600)
+        connection = store.db(cfg)
+        self.addCleanup(connection.close)
+        connection.execute("INSERT INTO offenders VALUES(?,?,?,?,?,?,?,?,?,?)",
+                           ("203.0.113.9", 10, 1000, 1000, 5000, 1000, 0, 3, "", 2000))
+        store.record_batch(cfg, connection, "203.0.113.9", "pf", "blocked", 1060, 100)
+        self.assertEqual(connection.execute("SELECT hits,ban_secs FROM offenders").fetchone(), (110, 4940))
+
+    def test_empty_batches_and_allowlisted_addresses_are_ignored(self):
+        cfg = make_cfg(allowlist="203.0.113.0/24")
+        connection = store.db(cfg)
+        self.addCleanup(connection.close)
+        store.record_batch(cfg, connection, "203.0.113.10", "pf", "blocked", 1000, 100)
+        for count in (0, -1):
+            store.record_batch(cfg, connection, "198.51.100.10", "pf", "blocked", 1000, count)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM offenders").fetchone()[0], 0)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], 0)
+
+
+class PfCounters(unittest.TestCase):
+    @staticmethod
+    def output(address, count, cleared="Wed Nov 4 11:00:00 2026"):
+        return (f"   {address}\n\tCleared: {cleared}\n"
+                f"\tIn/Block: [ Packets: {count} Bytes: 1000 ]\n"
+                "\tIn/Pass: [ Packets: 9999 Bytes: 1000 ]\n"
+                "\tOut/Block: [ Packets: 8888 Bytes: 1000 ]\n")
+
+    def setUp(self):
+        self.cfg = make_cfg(dry_run=False)
+        self.connection = store.db(self.cfg)
+        self.addCleanup(self.connection.close)
+        self.outputs = {self.cfg.pf_table: "", self.cfg.pf_table6: ""}
+        self.runner = patch("proban.enforce.subprocess.run", side_effect=self.run_pfctl).start()
+        self.addCleanup(patch.stopall)
+
+    def run_pfctl(self, command, **kwargs):
+        output = self.outputs[command[2]]
+        if isinstance(output, Exception):
+            raise output
+        return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+    def test_parser_reads_only_incoming_block_packets(self):
+        output = self.output("203.0.113.7/32", 12) + self.output("2001:db8::1/128", 34)
+        counters = enforce.parse_counters(output)
+        self.assertEqual(counters["203.0.113.7"][1], 12)
+        self.assertEqual(counters["2001:db8::1"][1], 34)
+        self.assertEqual(enforce.parse_counters(""), {})
+        with self.assertRaises(ValueError):
+            enforce.parse_counters("203.0.113.7\nCleared: now\n")
+        with self.assertRaises(ValueError):
+            enforce.parse_counters("X 203.0.113.7\nCleared: now\n")
+
+    def test_initial_snapshot_then_delta_are_persisted_once(self):
+        self.outputs[self.cfg.pf_table] = self.output("203.0.113.7", 100)
+        self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1000), 0)
+        self.outputs[self.cfg.pf_table] = self.output("203.0.113.7", 350)
+        self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1060), 250)
+        self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1120), 0)
+        self.assertEqual(self.connection.execute("SELECT hits,last_seen FROM offenders").fetchone(), (250, 1060))
+        self.assertEqual(self.connection.execute("SELECT COUNT(*),SUM(hits) FROM events").fetchone(), (1, 250))
+        self.assertIn("250 blocked packets", self.connection.execute("SELECT reason FROM events").fetchone()[0])
+
+    def test_new_entry_and_counter_resets_are_counted(self):
+        enforce.poll_counters(self.cfg, self.connection, 1000)
+        self.outputs[self.cfg.pf_table] = self.output("203.0.113.7", 50)
+        self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1060), 50)
+        self.outputs[self.cfg.pf_table] = self.output("203.0.113.7", 7)
+        self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1120), 7)
+        self.outputs[self.cfg.pf_table] = self.output("203.0.113.7", 20, "Wed Nov 4 11:05:00 2026")
+        self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1180), 20)
+        self.assertEqual(self.connection.execute("SELECT hits FROM offenders").fetchone(), (77,))
+
+    def test_disappearing_entry_does_not_reuse_old_counter(self):
+        enforce.poll_counters(self.cfg, self.connection, 1000)
+        self.outputs[self.cfg.pf_table] = self.output("203.0.113.7", 100)
+        enforce.poll_counters(self.cfg, self.connection, 1060)
+        self.outputs[self.cfg.pf_table] = ""
+        enforce.poll_counters(self.cfg, self.connection, 1120)
+        self.outputs[self.cfg.pf_table] = self.output("203.0.113.7", 150)
+        self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1180), 150)
+
+    def test_read_failure_retains_snapshot_and_recovers(self):
+        self.outputs[self.cfg.pf_table] = self.output("203.0.113.7", 100)
+        enforce.poll_counters(self.cfg, self.connection, 1000)
+        self.outputs[self.cfg.pf_table] = subprocess.CalledProcessError(1, "pfctl")
+        self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1060), 0)
+        self.assertIn(self.cfg.pf_table, store.gs(self.connection, "counter_error"))
+        self.outputs[self.cfg.pf_table] = self.output("203.0.113.7", 200)
+        self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1120), 100)
+        self.assertEqual(store.gs(self.connection, "counter_error"), "")
+
+    def test_allowlisted_addresses_do_not_gain_hits(self):
+        enforce.poll_counters(self.cfg, self.connection, 1000)
+        self.outputs[self.cfg.pf_table] = self.output("10.0.0.1", 100)
+        self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1060), 0)
+        self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM offenders").fetchone()[0], 0)
+
+    def test_dry_run_disabled_and_firewall_source_off_do_not_read_pf(self):
+        for overrides in ({"dry_run": True}, {"enabled": False}, {"sources": {"firewall": False}}):
+            with self.subTest(overrides=overrides):
+                cfg = make_cfg(dry_run=False, **overrides) if "dry_run" not in overrides else make_cfg(**overrides)
+                self.assertEqual(enforce.poll_counters(cfg, self.connection, 1000), 0)
+        self.runner.assert_not_called()
+
+    def test_tarpit_pass_tables_are_not_counted(self):
+        cfg = make_cfg(dry_run=False, action="tarpit", tarpit_ip="10.66.66.10", tarpit_ip6="fd00:66::10",
+                       post_max_action="blackhole")
+        self.outputs = {cfg.pf_table_drop: "", cfg.pf_table_drop6: ""}
+        enforce.poll_counters(cfg, self.connection, 1000)
+        self.outputs[cfg.pf_table_drop] = self.output("203.0.113.7", 100)
+        self.assertEqual(enforce.poll_counters(cfg, self.connection, 1060), 100)
+        self.assertEqual({call.args[0][2] for call in self.runner.call_args_list}, set(self.outputs))
+
+    def test_reenabling_collection_starts_with_a_fresh_baseline(self):
+        packet_count = 100
+        self.outputs[self.cfg.pf_table] = self.output("203.0.113.7", packet_count)
+        enforce.poll_counters(self.cfg, self.connection, 1000)
+        for overrides in ({"dry_run": True}, {"enabled": False}, {"sources": {"firewall": False}}):
+            with self.subTest(overrides=overrides):
+                enforce.poll_counters(make_cfg(**overrides), self.connection, 1060)
+                packet_count += 900
+                self.outputs[self.cfg.pf_table] = self.output("203.0.113.7", packet_count)
+                self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1120), 0)
+        self.assertEqual(self.connection.execute("SELECT COUNT(*) FROM offenders").fetchone()[0], 0)
+
+    def test_ipv6_subnet_hits_are_not_invented_for_individual_hosts(self):
+        enforce.poll_counters(self.cfg, self.connection, 1000)
+        self.outputs[self.cfg.pf_table6] = self.output("2001:db8:bad::/64", 250)
+        self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1060), 250)
+        self.assertEqual(self.connection.execute("SELECT ip,hits FROM offenders").fetchall(),
+                         [("2001:db8:bad::/64", 250)])
+        self.assertIn("subnet total", self.connection.execute("SELECT reason FROM events").fetchone()[0])
+        with patch("proban.enforce.synctable") as sync:
+            enforce.enforce(self.cfg, self.connection, 1060)
+        self.assertIn("2001:db8:bad::/64", sync.call_args_list[2].args[1])
+
+    def test_subnet_overlapping_allowlist_is_protected(self):
+        cfg = make_cfg(dry_run=False, allowlist="2001:db8:bad::1/128")
+        enforce.poll_counters(cfg, self.connection, 1000)
+        self.outputs[cfg.pf_table6] = self.output("2001:db8:bad::/64", 250)
+        self.assertEqual(enforce.poll_counters(cfg, self.connection, 1060), 0)
+
+    def test_sync_initializes_new_entry_and_discards_removed_snapshot(self):
+        store.ss(self.connection, "pf_counters:" + self.cfg.pf_table,
+                 json.dumps({"203.0.113.8": ["old", 500]}))
+        with patch("proban.enforce.subprocess.run") as runner:
+            runner.side_effect = [subprocess.CompletedProcess([], 0, stdout="203.0.113.8\n"),
+                                  subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 0)]
+            enforce.synctable(self.cfg.pf_table, ["203.0.113.7"], self.connection)
+        self.assertEqual(json.loads(store.gs(self.connection, "pf_counters:" + self.cfg.pf_table)),
+                         {"203.0.113.7": [None, 0]})
+        self.outputs[self.cfg.pf_table] = self.output("203.0.113.7", 30)
+        self.assertEqual(enforce.poll_counters(self.cfg, self.connection, 1060), 30)
+
+
+class CounterIntegration(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.cfg = make_cfg(db=os.path.join(self.directory.name, "offenders.db"), dry_run=False,
+                            sources={"firewall": True, "suricata": False})
+        connection = store.db(self.cfg)
+        store.record(self.cfg, connection, "203.0.113.7", "firewall", "probe", 1000)
+        store.ss(connection, "pf_counters:" + self.cfg.pf_table,
+                 json.dumps({"203.0.113.7": ["Wed Nov 4 11:00:00 2026", 0]}))
+        connection.commit()
+        connection.close()
+
+    def test_engine_renews_ban_before_decay_and_restart_does_not_recount(self):
+        def run_pfctl(command, **kwargs):
+            output = PfCounters.output("203.0.113.7", 250) if command[2] == self.cfg.pf_table else ""
+            return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+        with patch("engine.config.load", return_value=self.cfg), patch("engine.time.time", return_value=1120), \
+                patch("engine.ingest.ingest_fwlog", return_value=0), patch("engine.enforce.synctable"), \
+                patch("proban.enforce.subprocess.run", side_effect=run_pfctl), patch("builtins.print"):
+            engine.main()
+            engine.main()
+        connection = store.db(self.cfg)
+        self.addCleanup(connection.close)
+        hits, ban = connection.execute("SELECT hits,ban_secs FROM offenders").fetchone()
+        self.assertEqual(hits, 251)
+        self.assertGreater(ban, 0)
+        self.assertEqual(connection.execute("SELECT COUNT(*),SUM(hits) FROM events").fetchone(), (2, 251))
+
+    def test_counter_failure_keeps_existing_ban_and_pf_tables(self):
+        with patch("engine.config.load", return_value=self.cfg), patch("engine.time.time", return_value=1120), \
+                patch("engine.ingest.ingest_fwlog", return_value=0), patch("engine.enforce.synctable") as sync, \
+                patch("proban.enforce.subprocess.run", side_effect=OSError("pf unavailable")), patch("builtins.print"):
+            engine.main()
+        connection = store.db(self.cfg)
+        self.addCleanup(connection.close)
+        self.assertEqual(connection.execute("SELECT hits,ban_secs FROM offenders").fetchone(), (1, 30))
+        self.assertIn("pf unavailable", store.gs(connection, "counter_error"))
+        sync.assert_not_called()
+
+    def test_disabled_engine_discards_counter_baselines(self):
+        for dry_run in (False, True):
+            with self.subTest(dry_run=dry_run):
+                connection = store.db(self.cfg)
+                store.ss(connection, "pf_counters:" + self.cfg.pf_table, '{"203.0.113.7":[null,100]}')
+                connection.commit()
+                connection.close()
+                cfg = make_cfg(db=self.cfg.db, enabled=False, dry_run=dry_run)
+                with patch("engine.config.load", return_value=cfg), patch("engine.enforce.synctable"), \
+                        patch("proban.enforce.subprocess.run") as runner, patch("builtins.print"):
+                    engine.main()
+                connection = store.db(self.cfg)
+                self.addCleanup(connection.close)
+                self.assertEqual(store.gs(connection, "pf_counters:" + cfg.pf_table, "missing"), "missing")
+                runner.assert_not_called()
 
 
 class Blackhole(unittest.TestCase):

@@ -5,6 +5,8 @@
   <button type="button" class="btn btn-default btn-sm" id="pbSettingsBtn"><i class="fa fa-cog"></i> {{ lang._('Settings') }}</button>
 </div>
 <div id="pbTamper" class="alert alert-danger" style="display:none;"><i class="fa fa-exclamation-triangle"></i> <b>{{ lang._('TAMPER DETECTED') }}</b> &mdash; {{ lang._('the tarpit redirect was pointed at a public IP') }} (<span id="pbTamperIp"></span>). {{ lang._('The block table has been flushed to prevent outbound reflection. Fix the target to a private/LAN address in Settings.') }}</div>
+<div id="pbRefreshError" class="alert alert-warning" role="status" style="display:none;"><i class="fa fa-exclamation-triangle"></i> {{ lang._('Dashboard refresh delayed. The last available data is retained.') }}</div>
+<div id="pbCounterError" class="alert alert-warning" style="display:none;"><i class="fa fa-exclamation-triangle"></i> <b>{{ lang._('PF counters unavailable') }}</b>: <span id="pbCounterErrorText"></span></div>
 <div class="row">
   <div class="col-xs-3"><div class="content-box pb-card"><div class="n" id="pb-total">-</div><div class="l">{{ lang._('Offenders') }}</div></div></div>
   <div class="col-xs-3"><div class="content-box pb-card"><div class="n" id="pb-active">-</div><div class="l">{{ lang._('Active Blocks') }}</div></div></div>
@@ -43,6 +45,11 @@
 <div class="content-box" style="padding:15px;">
   <b>{{ lang._('Offenders') }}</b> <small class="text-muted">- {{ lang._('click a row for its full history') }}</small>
   <div style="margin:6px 0; display:flex; gap:14px; align-items:center; flex-wrap:wrap; font-size:11px;">
+    <div class="input-group input-group-sm" style="width:240px;max-width:100%;">
+      <label class="sr-only" for="pbSearch">{{ lang._('Search IP or prefix') }}</label>
+      <input type="search" class="form-control" id="pbSearch" placeholder="{{ lang._('Search IP or prefix') }}" autocomplete="off" spellcheck="false">
+      <span class="input-group-btn"><button type="button" class="btn btn-default" id="pbSearchClear" title="{{ lang._('Clear search') }}" aria-label="{{ lang._('Clear search') }}" disabled><i class="fa fa-times" aria-hidden="true"></i></button></span>
+    </div>
     <span>
       <small class="text-muted">{{ lang._('IPv') }}</small>
       <div class="btn-group btn-group-xs" id="pbFamily" style="vertical-align:middle;">
@@ -68,14 +75,25 @@
       <button type="button" class="btn btn-default" id="pbNext" title="{{ lang._('next') }}"><i class="fa fa-chevron-right"></i></button>
     </div>
   </div>
+  <div class="table-responsive">
   <table class="table table-striped table-condensed" id="pbTbl" style="margin-top:8px;">
-    <thead><tr><th class="pbsort" data-k="ip">{{ lang._('Source IP') }} <span class="pbcar"></span></th><th class="pbsort" data-k="hits">{{ lang._('Hits') }} <span class="pbcar"></span></th><th class="pbsort" data-k="ban_secs">{{ lang._('Ban') }} <span class="pbcar"></span></th><th class="pbsort" data-k="level">{{ lang._('Level') }} <span class="pbcar"></span></th><th class="pbsort" data-k="blocked_until">{{ lang._('Blocked until') }} <span class="pbcar"></span></th><th>{{ lang._('Latest reason') }}</th></tr></thead>
+    <thead><tr><th class="pbsort" data-k="ip">{{ lang._('Source IP') }} <span class="pbcar"></span></th><th class="pbsort" data-k="hits">{{ lang._('Hits') }} <span class="pbcar"></span></th><th class="pbsort" data-k="last_seen">{{ lang._('Last seen') }} <span class="pbcar"></span></th><th class="pbsort" data-k="ban_secs">{{ lang._('Ban') }} <span class="pbcar"></span></th><th class="pbsort" data-k="level">{{ lang._('Level') }} <span class="pbcar"></span></th><th class="pbsort" data-k="blocked_until">{{ lang._('Blocked until') }} <span class="pbcar"></span></th><th>{{ lang._('Latest reason') }}</th></tr></thead>
     <tbody></tbody>
   </table>
+  </div>
 </div>
 <div class="modal fade" id="pbModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
   <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title" id="pbModalTitle">{{ lang._('Offender') }}</h4></div>
-  <div class="modal-body"><table class="table table-condensed"><thead><tr><th style="width:180px">{{ lang._('Time') }}</th><th style="width:90px">{{ lang._('Source') }}</th><th>{{ lang._('Reason') }}</th></tr></thead><tbody id="pbModalBody"></tbody></table></div>
+  <div class="modal-body" style="max-height:60vh;overflow-y:auto;">
+    <div id="pbHistoryError" class="alert alert-warning" role="status" style="display:none;"><i class="fa fa-exclamation-triangle"></i> {{ lang._('History temporarily unavailable. The last available data is retained.') }}</div>
+    <div class="table-responsive"><table class="table table-condensed"><thead><tr><th style="width:180px">{{ lang._('Time') }}</th><th style="width:90px">{{ lang._('Source') }}</th><th>{{ lang._('Hits') }}</th><th>{{ lang._('Reason') }}</th></tr></thead><tbody id="pbModalBody"></tbody></table></div>
+  </div>
+  <div class="modal-footer" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <button type="button" class="btn btn-default btn-sm" id="pbHistoryRefresh" title="{{ lang._('Refresh history') }}" aria-label="{{ lang._('Refresh history') }}" disabled><i class="fa fa-refresh" aria-hidden="true"></i></button>
+    <span id="pbHistoryInfo" role="status" style="margin-right:auto;"></span>
+    <button type="button" class="btn btn-default btn-sm" id="pbHistoryPrev" title="{{ lang._('Previous events') }}" aria-label="{{ lang._('Previous events') }}" disabled><i class="fa fa-chevron-left" aria-hidden="true"></i></button>
+    <button type="button" class="btn btn-default btn-sm" id="pbHistoryNext" title="{{ lang._('Next events') }}" aria-label="{{ lang._('Next events') }}" disabled><i class="fa fa-chevron-right" aria-hidden="true"></i></button>
+  </div>
 </div></div></div>
 <div class="modal fade" id="pbSettings" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
   <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-cog"></i> {{ lang._('ProBAN Settings') }}</h4></div>
@@ -152,6 +170,7 @@
     </div>
     <div class="pb-sect">
       <div class="h">{{ lang._('Housekeeping') }}</div>
+      <div class="checkbox"><label><input type="checkbox" id="pbHideExpired"> {{ lang._('Automatically hide expired offenders') }}</label></div>
       <div class="row">
         <div class="col-xs-6"><label style="font-size:11px;">{{ lang._('Event retention (days)') }}</label><input type="number" min="0" class="form-control input-sm" id="pbEventRet"></div>
         <div class="col-xs-6"><label style="font-size:11px;">{{ lang._('Offender amnesia (days)') }}</label><input type="number" min="0" class="form-control input-sm" id="pbAmnesia"></div>

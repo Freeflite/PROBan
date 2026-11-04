@@ -4,7 +4,9 @@ import ipaddress
 
 def allowed(cfg, ip):
     try:
-        return any(ipaddress.ip_address(ip) in n for n in cfg.allow)
+        network = ipaddress.ip_network(ip, strict=False)
+        return any(network.overlaps(allowed_network) for allowed_network in cfg.allow
+                   if network.version == allowed_network.version)
     except Exception:
         return True
 

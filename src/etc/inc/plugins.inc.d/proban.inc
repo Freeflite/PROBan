@@ -23,7 +23,13 @@ use OPNsense\ProBAN\Helper;
 function proban_add_alias_if_not_exist($name, $descr, $proto = 'IPv4')
 {
     $model = new Alias();
-    if ($model->getByName($name) != null) {
+    $alias = $model->getByName($name);
+    if ($alias !== null) {
+        if ((string)$alias->counters !== '1') {
+            $alias->counters = '1';
+            $model->serializeToConfig();
+            Config::getInstance()->save();
+        }
         return;
     }
     $alias = $model->aliases->alias->Add();
@@ -31,6 +37,7 @@ function proban_add_alias_if_not_exist($name, $descr, $proto = 'IPv4')
     $alias->description = $descr;
     $alias->proto = $proto;
     $alias->type = 'external';
+    $alias->counters = '1';
     $model->serializeToConfig();
     Config::getInstance()->save();
 }
@@ -69,12 +76,13 @@ function proban_register_tarpit(Plugin $fw, $ipprotocol, $from_alias, $target, a
 
 function proban_register_block(Plugin $fw, $ipprotocol, $from_alias, $descr)
 {
-    $fw->registerFilterRule(1, array(
+    $fw->registerFilterRule(0, array(
         'ipprotocol' => $ipprotocol,
         'descr'      => $descr,
         'from'       => $from_alias,
         'direction'  => 'in',
         'type'       => 'block',
+        'log'        => false,
         'quick'      => true,
     ));
 }

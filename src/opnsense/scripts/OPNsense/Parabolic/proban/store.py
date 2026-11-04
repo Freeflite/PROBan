@@ -17,7 +17,11 @@ def db(cfg):
         c.execute("ALTER TABLE offenders ADD COLUMN blackhole_until INT DEFAULT 0")   # v3: post-max blackhole state
     except Exception:
         pass
-    c.execute("CREATE TABLE IF NOT EXISTS events(ts INT,ip TEXT,source TEXT,reason TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS events(ts INT,ip TEXT,source TEXT,reason TEXT,hits INT NOT NULL DEFAULT 1)")
+    if "hits" not in {column[1] for column in c.execute("PRAGMA table_info(events)")}:
+        c.execute("ALTER TABLE events ADD COLUMN hits INT NOT NULL DEFAULT 1")
+    c.execute("CREATE INDEX IF NOT EXISTS events_ts ON events(ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS events_ip_ts ON events(ip,ts)")
     c.execute("CREATE TABLE IF NOT EXISTS state(k TEXT PRIMARY KEY,v TEXT)")
     return c
 
@@ -32,28 +36,37 @@ def ss(c, k, v):
 
 
 def record(cfg, c, ip, src, reason, ets):
-    if rules.allowed(cfg, ip):
+    record_batch(cfg, c, ip, src, reason, ets, 1)
+
+
+def record_batch(cfg, c, ip, src, reason, ets, count):
+    if count <= 0 or rules.allowed(cfg, ip):
         return
-    c.execute("INSERT INTO events VALUES(?,?,?,?)", (ets, ip, src, reason))
+    c.execute("INSERT INTO events(ts,ip,source,reason,hits) VALUES(?,?,?,?,?)", (ets, ip, src, reason, count))
     r = c.execute("SELECT hits,first_seen,ban_secs,last_calc,reasons,blackhole_until FROM offenders WHERE ip=?", (ip,)).fetchone()
     if r:
-        hits = r[0] + 1
+        previous_hits = r[0]
         first = r[1]
         bh = r[5] or 0
         ban = rules.decay_ban(cfg, r[2], r[3], ets, bh)
         reasons = r[4] or ""
     else:
-        hits = 1
+        previous_hits = 0
         first = ets
         bh = 0
         ban = 0.0
         reasons = ""
+    hits = previous_hits + count
     # while serving the blackhole, escalation is frozen -- they're being dropped, we just bleed them down
     frozen = (cfg.blackhole_on and bh > ets)
     if (not frozen) and hits >= cfg.grace and ban < cfg.maxban:
-        en = hits - cfg.grace + 1
+        eligible_hits = hits - max(previous_hits, cfg.grace - 1)
+        exponent = max(previous_hits, cfg.grace - 1) - cfg.grace + 1
         try:
-            inc = cfg.step * (cfg.mult ** (en - 1))
+            if cfg.mult == 1:
+                inc = cfg.step * eligible_hits
+            else:
+                inc = cfg.step * (cfg.mult ** exponent) * (cfg.mult ** eligible_hits - 1) / (cfg.mult - 1)
         except OverflowError:
             inc = cfg.maxban
         ban = min(cfg.maxban, ban + inc)

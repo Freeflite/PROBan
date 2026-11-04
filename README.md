@@ -18,11 +18,28 @@ Fixed-tier fail2ban-style blocking treats the guy who fat-fingered your SSH once
 
 Each offender has a **ban balance** (seconds):
 
-- **Grows on every hit** — including hits that land *after* they're already blocked (the logged drop rule feeds those back in). Increment per hit `n` is `step × multiplier^(n-1)`, capped at a configurable maximum.
+- **Grows on every hit** — including hits that land *after* they're already blocked (PF address counters feed those back in without logging every dropped packet). Increment per hit `n` is `step × multiplier^(n-1)`, capped at a configurable maximum.
 - **Decays linearly during silence** — a fixed amount per interval (default 30s per 60s). Stay quiet and your sentence bleeds off; keep knocking and it accelerates.
 - **Blocked while balance > 0.**
 
 That's the "parabolic" shape: accelerating up under active attack, linear decay when they give up. A one-off scanner is gone in a minute; a relentless one pins to the max ban and stays there.
+
+### Quiet blocked traffic
+
+ProBAN's drop rules run before CrowdSec and ordinary user filter rules and do not log individual packets. Initial detection still uses logged WAN TCP SYN probes and optional Suricata alerts. Once an address is blocked, the engine reads its incoming block counter from PF and stores one weighted event per address and cycle instead of one database event per packet. Tarpit/honeypot pass traffic continues to use the existing log-based detection; blackhole drops use counters.
+
+The dashboard's **Hits**, **Last seen**, 24-hour total, timeline and per-address history include these batches. For example, 250 more dropped packets add 250 hits and one history row with source `pf`. Collection normally runs every 60 seconds and the dashboard refreshes every 30 seconds. PF does not supply ports, TCP flags or individual packet times here: last-seen and batch timestamps indicate collection time. These counters include all incoming dropped packets from already-banned addresses, not just TCP SYN probes. Protected ports still exclude initial probes and tarpit knocks; they cannot be separated from an address's aggregate drop counter.
+
+IPv6 `/64` counters are shown as separate subnet-total rows rather than attributing unknown packets to individual hosts. Existing history is retained during the database migration. The first snapshot of a pre-existing table is a baseline, not a replay of earlier traffic; subsequent counter changes and resets are tracked. If counters cannot be read, the dashboard warns and existing bans/tables are retained until collection recovers.
+
+After deploying the updated files/package, reload the firewall to enable counters on new and existing ProBAN aliases and install the quiet rules, then run one collection cycle:
+
+```sh
+configctl filter reload
+configctl proban run
+```
+
+Existing database rows and service settings do not need resetting. Native PF behavior still needs verification on the target OPNsense appliance; local automated tests use FreeBSD-format counter fixtures.
 
 ## What happens to a banned IP — three actions, one setting
 
@@ -58,7 +75,13 @@ Under **Reporting → ProBAN**: live offender count / active blocks / events, a 
 
 The offenders table supports **pagination** (25 / 50 / 100 / custom / ALL rows) and an **IPv4 / IPv6 / Both** filter/switcher. Column sorting is preserved when you change page size or the IPv filter (sorting and pagination are coordinated server-side for the current view). Controls are always visible above the table.
 
-A **Protected ports** setting (comma/space separated) lets you exclude specific ports (e.g. OpenVPN/TCP, other services) from probe and knock counting. This, combined with smarter knock detection (only counts `pass,in` when action=tarpit, destination matches tarpit target IP, and port is in the configured set), keeps legitimate inbound TCP traffic from triggering bans while still escalating on real tarpit hits. UDP VPNs (WireGuard, etc.) are invisible to ProBAN by design. VPN tunnel IPs are protected via the built-in SAFETY ranges + allowlist. See the compatibility section below.
+**Search IP or prefix** filters stored addresses case-insensitively by literal text, including IPv6 subnet rows. Search works with the address-family and expiry filters, sorting and pagination; the dashboard-wide statistics remain independent of the search. If a data refresh fails, the last available values stay visible with a warning instead of being replaced by zeros or an empty table.
+
+Per-address history has previous/next controls with 100 events per page, including IPv6 subnet totals. An open history keeps a stable snapshot while new traffic arrives; **Refresh history** starts again with the latest events. History remains subject to event retention. Time-window statistics, history and retention cleanup use database indexes, installed automatically on the next engine run without discarding existing records. The initial index build can take longer on large databases.
+
+Under **Settings > Housekeeping**, **Automatically hide expired offenders** removes expired IPs from the overview and its offender total on refresh. It is off by default. This is an appearance filter only: hit counters, history and escalation remain intact, and an IP reappears automatically if it is banned again. Turn it off to show expired entries again; the existing retention and amnesia settings still govern actual data cleanup.
+
+A **Protected ports** setting (comma/space separated) lets you exclude specific ports (e.g. OpenVPN/TCP, other services) from probe and knock counting. This, combined with smarter knock detection (only counts `pass,in` when action=tarpit, destination matches tarpit target IP, and port is in the configured set), keeps legitimate inbound TCP traffic from triggering bans while still escalating on real tarpit hits. UDP traffic does not trigger initial firewall-log detection, but dropped UDP packets from an already-banned address contribute to its PF counter. VPN tunnel IPs are protected via the built-in SAFETY ranges + allowlist. See the compatibility section below.
 
 ## Repository layout
 

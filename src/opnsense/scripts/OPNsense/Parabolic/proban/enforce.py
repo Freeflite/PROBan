@@ -1,16 +1,109 @@
 # pf table synchronization + the address-family / blackhole routing.
+import ipaddress
+import json
 import re
 import subprocess
 
-from . import aggregate, rules
+from . import aggregate, rules, store
 
 
-def synctable(table, ips):
+def parse_counters(output):
+    counters = {}
+    address = None
+    cleared = None
+    packets = None
+    for line in output.splitlines() + [""]:
+        value = line.strip()
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            network = None
+        if network is not None or not value:
+            if address is not None:
+                if cleared is None or packets is None:
+                    raise ValueError(f"missing address counters for {address}")
+                counters[address] = [cleared, packets]
+            address = (str(network.network_address) if network.num_addresses == 1 else str(network)) if network is not None else None
+            cleared = None
+            packets = None
+        elif value.startswith("Cleared:"):
+            cleared = value.partition(":")[2].strip()
+        elif value.startswith("In/Block:"):
+            match = re.search(r"\[\s*Packets:\s*(\d+)\s+Bytes:", value)
+            if match is None:
+                raise ValueError("invalid incoming block counter")
+            packets = int(match.group(1))
+    if output.strip() and not counters:
+        raise ValueError("no address counters in pfctl output")
+    return counters
+
+
+def poll_counters(cfg, connection, now):
+    if not cfg.enabled or cfg.dry_run or not cfg.sources.get("firewall", True):
+        connection.execute("DELETE FROM state WHERE k LIKE 'pf_counters:%'")
+        store.ss(connection, "counter_error", "")
+        return 0
+    tables = []
+    for table, drop_table, target in (
+            (cfg.pf_table, cfg.pf_table_drop, cfg.tarpit_ip),
+            (cfg.pf_table6, cfg.pf_table_drop6, cfg.tarpit_ip6)):
+        if cfg.action != "tarpit" or not rules.is_private_target(target):
+            tables.append(table)
+        elif cfg.blackhole_on:
+            tables.append(drop_table)
+    counts = {}
+    errors = []
+    for table in tables:
+        try:
+            result = subprocess.run(["pfctl", "-t", table, "-v", "-T", "show"],
+                                    capture_output=True, text=True, check=True, timeout=10)
+            current = parse_counters(result.stdout)
+        except (OSError, subprocess.SubprocessError, ValueError) as error:
+            errors.append(f"{table}: {error}")
+            continue
+        key = "pf_counters:" + table
+        try:
+            previous = json.loads(store.gs(connection, key, "null"))
+        except ValueError:
+            previous = None
+        if isinstance(previous, dict):
+            for address, (cleared, packets) in current.items():
+                old = previous.get(address)
+                delta = packets if old is None or old[0] is None or old[0] != cleared or packets < old[1] else packets - old[1]
+                if delta > 0 and not rules.allowed(cfg, address):
+                    counts[address] = counts.get(address, 0) + delta
+        store.ss(connection, key, json.dumps(current))
+    for address, count in counts.items():
+        reason = f"{count} blocked packets"
+        if "/" in address:
+            reason += " (subnet total)"
+        store.record_batch(cfg, connection, address, "pf", reason, now, count)
+    store.ss(connection, "counter_error", "; ".join(errors))
+    return sum(counts.values())
+
+
+def synctable(table, ips, connection=None):
     cur = subprocess.run(["pfctl", "-t", table, "-T", "show"], capture_output=True, text=True).stdout.split()
+    key = "pf_counters:" + table
+    try:
+        snapshot = json.loads(store.gs(connection, key, "{}")) if connection is not None else {}
+    except ValueError:
+        snapshot = {}
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    changed = False
     for ip in set(ips) - set(cur):
-        subprocess.run(["pfctl", "-t", table, "-T", "add", ip])
+        result = subprocess.run(["pfctl", "-t", table, "-T", "add", ip])
+        if result.returncode == 0:
+            snapshot[ip] = [None, 0]
+            changed = True
     for ip in set(cur) - set(ips):
-        subprocess.run(["pfctl", "-t", table, "-T", "delete", ip])
+        result = subprocess.run(["pfctl", "-t", table, "-T", "delete", ip])
+        if result.returncode == 0:
+            snapshot.pop(ip, None)
+            changed = True
+    if connection is not None and changed:
+        store.ss(connection, key, json.dumps(snapshot))
 
 
 def rdr_target(table):
@@ -69,8 +162,9 @@ def enforce(cfg, c, now):
     v6_all = v6_keep + v6_drop
     if cfg.dry_run:
         return active, dropped, v6_all, "DRY-RUN"
-    synctable(cfg.pf_table, v4_keep)
-    synctable(cfg.pf_table_drop, v4_drop)
-    synctable(cfg.pf_table6, v6_keep)
-    synctable(cfg.pf_table_drop6, v6_drop)
+    snapshots = c if cfg.sources.get("firewall", True) else None
+    synctable(cfg.pf_table, v4_keep, snapshots)
+    synctable(cfg.pf_table_drop, v4_drop, snapshots)
+    synctable(cfg.pf_table6, v6_keep, snapshots)
+    synctable(cfg.pf_table_drop6, v6_drop, snapshots)
     return active, dropped, v6_all, "enforced"

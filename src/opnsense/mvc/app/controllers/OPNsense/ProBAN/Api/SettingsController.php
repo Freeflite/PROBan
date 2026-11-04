@@ -36,6 +36,7 @@ class SettingsController extends ApiControllerBase
             "decay_interval" => (int)((string)$mdl->decay_interval),
             "event_retention_days" => (int)((string)$mdl->event_retention_days),
             "offender_amnesia_days" => (int)((string)$mdl->offender_amnesia_days),
+            "hide_expired" => (int)((string)$mdl->hide_expired),
             "allowlist" => $allow,
             "sources" => [
                 "firewall" => (int)((string)$mdl->src_firewall),
@@ -79,6 +80,7 @@ class SettingsController extends ApiControllerBase
         $mdl->decay_interval = (string)max(1, (int)$req->getPost("decay_interval", "int", 60));
         $mdl->event_retention_days = (string)max(0, (int)$req->getPost("event_retention_days", "int", 14));
         $mdl->offender_amnesia_days = (string)max(0, (int)$req->getPost("offender_amnesia_days", "int", 30));
+        $mdl->hide_expired = $req->getPost("hide_expired", "int", (int)((string)$mdl->hide_expired)) ? "1" : "0";
 
         $al = $req->getPost("allowlist");
         if (is_array($al)) {
