@@ -1,4 +1,5 @@
 # SQLite offender/event store + the record and decay operations.
+import ipaddress
 import os
 import sqlite3
 from itertools import groupby
@@ -25,6 +26,9 @@ def db(cfg):
     c.execute("CREATE INDEX IF NOT EXISTS events_ip_ts ON events(ip,ts)")
     c.execute("CREATE TABLE IF NOT EXISTS scan_ports(ip TEXT,destination TEXT,protocol TEXT,port INT,last_seen INT,PRIMARY KEY(ip,destination,protocol,port))")
     c.execute("CREATE INDEX IF NOT EXISTS scan_ports_last_seen ON scan_ports(last_seen)")
+    c.execute("CREATE TABLE IF NOT EXISTS v6_rotation(prefix TEXT,ip TEXT,ts INT,hits INT,PRIMARY KEY(prefix,ip,ts))")
+    c.execute("CREATE INDEX IF NOT EXISTS v6_rotation_prefix_ts ON v6_rotation(prefix,ts)")
+    c.execute("CREATE INDEX IF NOT EXISTS v6_rotation_ts ON v6_rotation(ts)")
     c.execute("CREATE TABLE IF NOT EXISTS state(k TEXT PRIMARY KEY,v TEXT)")
     return c
 
@@ -44,6 +48,7 @@ def record(cfg, c, ip, src, reason, ets):
 
 def record_many(cfg, connection, events, pending=None):
     total = 0
+    rotations = {}
     for event, matching in groupby(events):
         ip, source, reason, timestamp = event[:4]
         minimum_ban = event[4] if len(event) > 4 else 0
@@ -53,14 +58,71 @@ def record_many(cfg, connection, events, pending=None):
                         minimum_ban=minimum_ban, scan_target=scan_target)
         if newly_active and pending is not None:
             pending.add(ip)
+        prefix = track_rotation(cfg, connection, ip, timestamp, count, scan_target)
+        if prefix is not None:
+            rotations[prefix] = max(timestamp, rotations.get(prefix, timestamp))
         total += count
+    for prefix, timestamp in rotations.items():
+        activate_rotation(cfg, connection, prefix, timestamp, pending)
     return total
+
+
+def track_rotation(cfg, connection, ip, timestamp, count, target):
+    if not cfg.detect_v6_rotation or target is None or target[1] != "tcp" or rules.allowed(cfg, ip):
+        return None
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if address.version != 6 or address.is_multicast or address.is_unspecified:
+        return None
+    prefix = str(ipaddress.ip_network(f"{address}/64", strict=False))
+    connection.execute("INSERT INTO v6_rotation(prefix,ip,ts,hits) VALUES(?,?,?,?) "
+                       "ON CONFLICT(prefix,ip,ts) DO UPDATE SET hits=hits+excluded.hits",
+                       (prefix, ip, timestamp, count))
+    return prefix
+
+
+def activate_rotation(cfg, connection, prefix, timestamp, pending=None):
+    participants = [row for row in connection.execute(
+        "SELECT rotation.ip,SUM(rotation.hits),offender.ban_secs,offender.last_calc,"
+        "offender.blackhole_until,offender.reasons FROM v6_rotation AS rotation "
+        "JOIN offenders AS offender ON offender.ip=rotation.ip "
+        "WHERE rotation.prefix=? AND rotation.ts>? AND rotation.ts<=? GROUP BY rotation.ip",
+        (prefix, timestamp - cfg.v6_rotation_window, timestamp)) if not rules.allowed(cfg, row[0])]
+    hits = sum(row[1] for row in participants)
+    if len(participants) < cfg.v6_rotation_sources or hits < cfg.v6_rotation_hits:
+        return
+    reason = (f"IPv6 source rotation: {len(participants)} sources in {prefix}, {hits} blocked TCP probes "
+              f"in {cfg.v6_rotation_window}s (thresholds {cfg.v6_rotation_sources} sources/{cfg.v6_rotation_hits} probes)")
+    minimum_ban = min(cfg.maxban, cfg.v6_rotation_secs * cfg.damt / cfg.dint)
+    for ip, probes, balance, last_calc, blackhole_until, reasons in participants:
+        blackhole_until = blackhole_until or 0
+        calculated_at = max(timestamp, last_calc)
+        if cfg.blackhole_on and blackhole_until > calculated_at:
+            continue
+        ban = rules.decay_ban(cfg, balance, last_calc, calculated_at, blackhole_until)
+        previous = [entry for entry in (reasons or "").split("\n") if entry]
+        if ban <= 0 or not any(entry.startswith("ipv6-rotation:") for entry in previous):
+            connection.execute("INSERT INTO events(ts,ip,source,reason,hits) VALUES(?,?,?,?,0)",
+                               (timestamp, ip, "ipv6-rotation", reason))
+        ban = max(ban, minimum_ban)
+        initial = next((entry for entry in previous if not entry.startswith("pf:")), None)
+        entries = [entry for entry in previous if not entry.startswith("ipv6-rotation:")]
+        entries.append("ipv6-rotation:" + reason)
+        if initial and initial not in entries[-5:]:
+            entries = [initial] + entries[-4:]
+        connection.execute("UPDATE offenders SET ban_secs=?,last_calc=?,blocked_until=?,level=?,reasons=? WHERE ip=?",
+                           (ban, calculated_at, rules.wall_until(cfg, calculated_at, ban), rules.level_of(ban),
+                            "\n".join(entries[-5:]), ip))
+        if pending is not None and ban > 0:
+            pending.add(ip)
 
 
 def record_batch(cfg, c, ip, src, reason, ets, count, minimum_ban=0, scan_target=None):
     if count <= 0 or rules.allowed(cfg, ip):
         return
-    qualified = src != "portscan"
+    qualified = src not in ("portscan", "ipv6-rotation")
     if src in ("udp", "tcp-scan", "tcp-invalid"):
         recent = c.execute("SELECT COALESCE(SUM(hits),0) FROM events WHERE ip=? AND source=? AND ts>? AND ts<=?",
                            (ip, src, ets - cfg.scan_window, ets)).fetchone()[0] + count
@@ -122,6 +184,7 @@ def record_batch(cfg, c, ip, src, reason, ets, count, minimum_ban=0, scan_target
 
 def decay_pass(cfg, c, now):
     c.execute("DELETE FROM scan_ports WHERE last_seen<=?", (now - cfg.portscan_window,))
+    c.execute("DELETE FROM v6_rotation WHERE ts<=?", (now - cfg.v6_rotation_window,))
     for ip, ban, lc, bh in c.execute("SELECT ip,ban_secs,last_calc,blackhole_until FROM offenders WHERE ban_secs>0").fetchall():
         bh = bh or 0
         nb = rules.decay_ban(cfg, ban, lc, now, bh)

@@ -39,6 +39,34 @@
             <Default>0</Default>
             <Required>Y</Required>
         </detect_portscan>
+        <detect_v6_rotation type="BooleanField">
+            <Default>0</Default>
+            <Required>Y</Required>
+        </detect_v6_rotation>
+        <v6_rotation_sources type="IntegerField">
+            <Default>8</Default>
+            <MinimumValue>2</MinimumValue>
+            <MaximumValue>256</MaximumValue>
+            <Required>Y</Required>
+        </v6_rotation_sources>
+        <v6_rotation_hits type="IntegerField">
+            <Default>40</Default>
+            <MinimumValue>2</MinimumValue>
+            <MaximumValue>100000</MaximumValue>
+            <Required>Y</Required>
+        </v6_rotation_hits>
+        <v6_rotation_window type="IntegerField">
+            <Default>300</Default>
+            <MinimumValue>10</MinimumValue>
+            <MaximumValue>3600</MaximumValue>
+            <Required>Y</Required>
+        </v6_rotation_window>
+        <v6_rotation_secs type="IntegerField">
+            <Default>600</Default>
+            <MinimumValue>60</MinimumValue>
+            <MaximumValue>86400</MaximumValue>
+            <Required>Y</Required>
+        </v6_rotation_secs>
         <portscan_threshold type="IntegerField">
             <Default>10</Default>
             <MinimumValue>2</MinimumValue>

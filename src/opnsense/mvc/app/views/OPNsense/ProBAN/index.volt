@@ -117,10 +117,9 @@
         <div style="margin-top:10px;border-top:1px dashed #ccc;padding-top:8px;">
           <label style="font-size:11px;display:block;margin-bottom:2px;">{{ lang._('IPv6') }} <small class="text-muted">{{ lang._('(optional — blank keeps IPv6 block-only)') }}</small></label>
           <div class="row">
-            <div class="col-xs-8"><label style="font-size:11px;">{{ lang._('IPv6 tarpit target (ULA)') }}</label><input type="text" class="form-control input-sm" id="pbTip6In" placeholder="fd00:66::10"></div>
-            <div class="col-xs-4"><label style="font-size:11px;">{{ lang._('Collapse /64 at') }}</label><input type="number" min="0" class="form-control input-sm" id="pbV6Agg" placeholder="4"></div>
+            <div class="col-xs-12"><label style="font-size:11px;">{{ lang._('IPv6 tarpit target (ULA)') }}</label><input type="text" class="form-control input-sm" id="pbTip6In" placeholder="fd00:66::10"></div>
           </div>
-          <small class="text-muted">{{ lang._('Set a ULA target to tarpit/honeypot IPv6 the same as IPv4. Bans individual /128s, escalating to the whole /64 once this many distinct offenders show up in it (0 = never — /128 only, safest for shared-hosting /64s).') }}</small>
+          <small class="text-muted">{{ lang._('Set a ULA target to tarpit/honeypot IPv6 the same as IPv4.') }}</small>
         </div>
         <div style="margin-top:10px;border-top:1px dashed #ccc;padding-top:8px;">
           <label style="font-size:11px;display:block;margin-bottom:2px;">{{ lang._('When an offender hits max ban') }}</label>
@@ -172,6 +171,20 @@
       <div class="row" id="pbPortscanCfg" style="display:none;margin-top:8px;">
         <div class="col-xs-6"><label for="pbPortscanThreshold" style="font-size:11px;" title="{{ lang._('Counted separately per source IP, destination IP and protocol.') }}">{{ lang._('Distinct destination ports') }}</label><input type="number" min="2" max="65535" class="form-control input-sm" id="pbPortscanThreshold" value="10"></div>
         <div class="col-xs-6"><label for="pbPortscanWindow" style="font-size:11px;">{{ lang._('Portscan window (seconds)') }}</label><input type="number" min="1" max="3600" class="form-control input-sm" id="pbPortscanWindow" value="60"></div>
+      </div>
+      <div class="checkbox"><label title="{{ lang._('Correlate blocked WAN TCP probes from multiple IPv6 sources in the same /64. Shared networks and spoofed sources can cause false positives.') }}"><input type="checkbox" id="pbDetectV6Rotation"> {{ lang._('IPv6 source-rotation detection') }}</label></div>
+      <div id="pbV6RotationCfg" style="display:none;">
+        <div class="row">
+          <div class="col-xs-6"><label for="pbV6RotationSources" style="font-size:11px;">{{ lang._('Distinct sources per /64') }}</label><input type="number" min="2" max="256" class="form-control input-sm" id="pbV6RotationSources" value="8"></div>
+          <div class="col-xs-6"><label for="pbV6RotationHits" style="font-size:11px;">{{ lang._('TCP probes per /64') }}</label><input type="number" min="2" max="100000" class="form-control input-sm" id="pbV6RotationHits" value="40"></div>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <div class="col-xs-6"><label for="pbV6RotationWindow" style="font-size:11px;">{{ lang._('Correlation window (seconds)') }}</label><input type="number" min="10" max="3600" class="form-control input-sm" id="pbV6RotationWindow" value="300"></div>
+          <div class="col-xs-6"><label for="pbV6RotationMinimum" style="font-size:11px;">{{ lang._('Minimum ban (seconds)') }}</label><input type="number" min="60" max="86400" class="form-control input-sm" id="pbV6RotationMinimum" value="600"></div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <div class="col-xs-6"><label for="pbV6Agg" style="font-size:11px;" title="{{ lang._('Distinct banned /128s before a whole-/64 ban. 0 disables aggregation; safest for shared-hosting /64s. Allowlist overlaps always prevent subnet bans.') }}">{{ lang._('IPv6 /64 aggregation threshold') }}</label><input type="number" min="0" max="65536" class="form-control input-sm" id="pbV6Agg" value="4"></div>
       </div>
       <div class="row" style="margin-top:8px;">
         <div class="col-xs-6"><label style="font-size:11px;">{{ lang._('WAN interface device') }} <small class="text-muted">{{ lang._('(filter-log parsing)') }}</small></label><input type="text" class="form-control input-sm" id="pbWanIf" placeholder="vtnet1"></div>

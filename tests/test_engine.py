@@ -54,6 +54,9 @@ class ScanDetection(unittest.TestCase):
         self.assertFalse(cfg.detect_tcp_scan)
         self.assertFalse(cfg.detect_tcp_invalid)
         self.assertFalse(cfg.detect_portscan)
+        self.assertFalse(cfg.detect_v6_rotation)
+        self.assertEqual((cfg.v6_rotation_sources, cfg.v6_rotation_hits,
+                  cfg.v6_rotation_window, cfg.v6_rotation_secs), (8, 40, 300, 600))
         self.assertEqual((cfg.portscan_threshold, cfg.portscan_window), (10, 60))
         custom = config.Cfg({"scan_threshold": 12, "scan_window": 120,
                      "portscan_threshold": 20, "portscan_window": 90})
@@ -66,6 +69,8 @@ class ScanDetection(unittest.TestCase):
                                                "OPNsense", "ProBAN", "General.xml"))
         expected = {"detect_syn": "1", "detect_udp": "0", "detect_tcp_scan": "0",
                     "detect_tcp_invalid": "0", "detect_portscan": "0",
+                    "detect_v6_rotation": "0", "v6_rotation_sources": "8",
+                    "v6_rotation_hits": "40", "v6_rotation_window": "300", "v6_rotation_secs": "600",
                     "portscan_threshold": "10", "portscan_window": "60",
                     "scan_threshold": "5", "scan_window": "60", "suricata_priority": "0",
                     "suricata_priority_severity": "1", "suricata_priority_secs": "1800"}
@@ -225,6 +230,196 @@ class ScanDetection(unittest.TestCase):
         self.assertEqual(len(pending), 1)
         self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], 3)
         self.assertIn("3 distinct", connection.execute("SELECT reasons FROM offenders").fetchone()[0])
+
+    def test_ipv6_rotation_bans_observed_sources_below_individual_thresholds(self):
+        addresses = {f"2001:db8:bad::{number}" for number in range(1, 5)}
+        lines = [self.line(version=6, source=address, port=port)
+                 for address in sorted(addresses) for port in (22, 23)]
+        count, connection, pending = self.ingest_lines(
+            lines, detect_syn=False, grace_hits=10, detect_v6_rotation=True,
+            v6_rotation_sources=4, v6_rotation_hits=8, v6_rotation_secs=600)
+        self.assertEqual(count, 8)
+        self.assertEqual(pending, addresses)
+        self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], 8)
+        for address, hits, ban, reasons in connection.execute("SELECT ip,hits,ban_secs,reasons FROM offenders"):
+            self.assertIn(address, addresses)
+            self.assertEqual(hits, 2)
+            self.assertGreater(ban, 0)
+            self.assertIn("IPv6 source rotation", reasons)
+        self.assertEqual(enforce.enforce(make_cfg(), connection, 1793793600)[2], ["2001:db8:bad::/64"])
+
+    def test_ipv6_rotation_requires_both_source_and_hit_thresholds(self):
+        for addresses, hits_per_address in ((1, 12), (4, 1), (3, 4), (4, 2)):
+            with self.subTest(addresses=addresses, hits_per_address=hits_per_address):
+                lines = [self.line(version=6, source=f"2001:db8:bad::{address}")
+                         for address in range(1, addresses + 1) for hit in range(hits_per_address)]
+                count, connection, pending = self.ingest_lines(
+                    lines, detect_syn=False, detect_v6_rotation=True,
+                    v6_rotation_sources=4, v6_rotation_hits=8)
+                self.assertEqual(count, addresses * hits_per_address)
+                self.assertEqual(bool(pending), addresses >= 4 and count >= 8)
+                self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], count)
+
+    def test_ipv6_rotation_is_disabled_by_default_and_does_not_change_syn_detection(self):
+        lines = [self.line(version=6, source=f"2001:db8:bad::{address}")
+                 for address in range(1, 5) for hit in range(2)]
+        count, connection, pending = self.ingest_lines(lines, detect_syn=False)
+        self.assertEqual((count, pending), (0, set()))
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM v6_rotation").fetchone()[0], 0)
+        count, connection, pending = self.ingest_lines(lines)
+        self.assertEqual(count, 8)
+        self.assertEqual(len(pending), 4)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM v6_rotation").fetchone()[0], 0)
+
+    def test_ipv6_rotation_excludes_ipv4_udp_allowed_packets_and_non_probe_tcp(self):
+        lines = [self.line(source=f"203.0.113.{address}") for address in range(1, 9)]
+        for address in range(1, 9):
+            lines.extend([self.line(version=6, source=f"2001:db8:bad::{address}", protocol="udp"),
+                          self.line(version=6, source=f"2001:db8:bad::{address}", action="pass"),
+                          self.line(version=6, source=f"2001:db8:bad::{address}", flags="A"),
+                          self.line(version=6, source=f"2001:db8:bad::{address}", flags="R"),
+                          self.line(version=6, source=f"2001:db8:bad::{address}", flags="SA"),
+                          self.line(version=6, source=f"2001:db8:bad::{address}").replace(",vtnet1,", ",lagg0,")])
+        count, connection, pending = self.ingest_lines(
+            lines, detect_syn=False, detect_v6_rotation=True,
+            v6_rotation_sources=4, v6_rotation_hits=8)
+        self.assertEqual((count, pending), (0, set()))
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM v6_rotation").fetchone()[0], 0)
+
+    def test_ipv6_rotation_excludes_protected_ports_and_allowlisted_sources(self):
+        lines = [self.line(version=6, source=f"2001:db8:bad::{address}", port=port)
+                 for address in range(1, 5) for port in (22, 1194)]
+        count, connection, pending = self.ingest_lines(
+            lines, detect_syn=False, detect_v6_rotation=True, protected_ports="1194",
+            allowlist="2001:db8:bad::4", v6_rotation_sources=4, v6_rotation_hits=4)
+        self.assertEqual((count, pending), (3, set()))
+        self.assertEqual(connection.execute("SELECT SUM(hits) FROM v6_rotation").fetchone()[0], 3)
+
+    def test_ipv6_rotation_does_not_combine_different_prefixes_or_expired_probes(self):
+        lines = [self.line(version=6, source=f"2001:db8:{prefix}::{address}")
+                 for prefix in ("bad", "bee") for address in (1, 2) for hit in range(2)]
+        count, connection, pending = self.ingest_lines(
+            lines, detect_syn=False, detect_v6_rotation=True,
+            v6_rotation_sources=4, v6_rotation_hits=8)
+        self.assertEqual((count, pending), (8, set()))
+        lines = [self.line(version=6, source=f"2001:db8:bad::{address}", timestamp=timestamp)
+                 for timestamp, addresses in (("2026-11-04T11:59:00+00:00", (1, 2)),
+                                               ("2026-11-04T12:00:00+00:00", (3, 4)))
+                 for address in addresses for hit in range(2)]
+        count, connection, pending = self.ingest_lines(
+            lines, detect_syn=False, detect_v6_rotation=True,
+            v6_rotation_sources=4, v6_rotation_hits=8, v6_rotation_window=60)
+        self.assertEqual((count, pending), (8, set()))
+        store.decay_pass(make_cfg(v6_rotation_window=60), connection, 1793793600)
+        self.assertEqual(connection.execute("SELECT SUM(hits) FROM v6_rotation").fetchone()[0], 4)
+        self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], 8)
+
+    def test_ipv6_rotation_preserves_allowlist_overlap_and_disabled_aggregation(self):
+        addresses = {f"2001:db8:bad::{address}" for address in range(1, 5)}
+        lines = [self.line(version=6, source=address) for address in sorted(addresses) for hit in range(2)]
+        count, connection, pending = self.ingest_lines(
+            lines, detect_syn=False, detect_v6_rotation=True, allowlist="2001:db8:bad::99/128",
+            v6_rotation_sources=4, v6_rotation_hits=8)
+        self.assertEqual((count, pending), (8, addresses))
+        for cfg in (make_cfg(allowlist="2001:db8:bad::99/128"), make_cfg(v6_aggregate=0)):
+            self.assertEqual(set(enforce.enforce(cfg, connection, 1793793600)[2]), addresses)
+
+    def test_ipv6_rotation_window_survives_reopen_and_rolls_back_with_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cfg = make_cfg(db=os.path.join(directory, "offenders.db"), detect_v6_rotation=True,
+                           v6_rotation_sources=4, v6_rotation_hits=8)
+            timestamp = 1000
+            target = ("2001:db8::1", "tcp", 22)
+            connection = store.db(cfg)
+            store.record_many(cfg, connection, [(f"2001:db8:bad::{address}", "ipv6-rotation", "probe", timestamp, 0, target)
+                                                for address in range(1, 4) for hit in range(2)])
+            connection.commit()
+            connection.close()
+            connection = store.db(cfg)
+            self.addCleanup(connection.close)
+            pending = set()
+            final = [("2001:db8:bad::4", "ipv6-rotation", "probe", timestamp, 0, target)] * 2
+            store.record_many(cfg, connection, final, pending)
+            self.assertEqual(len(pending), 4)
+            connection.rollback()
+            self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], 6)
+            self.assertEqual(connection.execute("SELECT SUM(hits) FROM v6_rotation").fetchone()[0], 6)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM offenders WHERE ban_secs>0").fetchone()[0], 0)
+            pending.clear()
+            store.record_many(cfg, connection, final, pending)
+            self.assertEqual(len(pending), 4)
+            self.assertEqual(connection.execute("SELECT SUM(hits) FROM events").fetchone()[0], 8)
+
+    def test_ipv6_rotation_minimum_uses_real_seconds_and_does_not_shorten_existing_bans(self):
+        lines = [self.line(version=6, source=f"2001:db8:bad::{address}")
+                 for address in range(1, 5) for hit in range(2)]
+        count, connection, pending = self.ingest_lines(
+            lines, detect_syn=False, detect_v6_rotation=True, decay_amount=10, decay_interval=90,
+            v6_rotation_sources=4, v6_rotation_hits=8, v6_rotation_secs=600)
+        self.assertEqual(count, 8)
+        expiries = connection.execute("SELECT DISTINCT blocked_until FROM offenders").fetchall()
+        self.assertEqual(expiries, [(1793794200,)])
+        cfg = make_cfg(detect_v6_rotation=True, v6_rotation_sources=4, v6_rotation_hits=8)
+        connection.execute("UPDATE offenders SET ban_secs=1200,last_calc=1793793600")
+        store.activate_rotation(cfg, connection, "2001:db8:bad::/64", 1793793600, pending)
+        self.assertEqual(connection.execute("SELECT MIN(ban_secs) FROM offenders").fetchone()[0], 1200)
+
+    def test_ipv6_rotation_dry_run_and_fast_enforcement_use_existing_pf_safety(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "filter.log")
+            cfg = make_cfg(fwlog=path, detect_syn=False, detect_v6_rotation=True,
+                           v6_rotation_sources=4, v6_rotation_hits=8,
+                           sources={"firewall": True, "suricata": False})
+            connection = store.db(cfg)
+            self.addCleanup(connection.close)
+            with patch("engine.time.time", return_value=1793793600), patch("proban.enforce.synctable") as sync:
+                for address in range(1, 5):
+                    with open(path, "a") as handle:
+                        handle.write(self.line(version=6, source=f"2001:db8:bad::{address}") * 2)
+                    with patch("builtins.print"):
+                        engine.run_cycle(cfg, connection, maintenance=False)
+                sync.assert_not_called()
+                cfg.dry_run = False
+                enforce.enforce_pending(cfg, connection, 1793793600,
+                                        {f"2001:db8:bad::{address}" for address in range(1, 5)})
+                sync.assert_called_once()
+                self.assertEqual(sync.call_args.args[0], cfg.pf_table6)
+                self.assertEqual(set(sync.call_args.args[1]), {"2001:db8:bad::/64"})
+                self.assertTrue(sync.call_args.kwargs["additive"])
+
+    def test_ipv6_rotation_respects_max_balance_and_frozen_blackhole(self):
+        cfg = make_cfg(detect_v6_rotation=True, v6_rotation_sources=2, v6_rotation_hits=2,
+                       max_ban_secs=60, v6_rotation_secs=600)
+        connection = store.db(cfg)
+        self.addCleanup(connection.close)
+        target = ("2001:db8::1", "tcp", 22)
+        pending = set()
+        store.record_many(cfg, connection, [(f"2001:db8:bad::{address}", "ipv6-rotation", "probe", 1000, 0, target)
+                                            for address in (1, 2)], pending)
+        self.assertEqual(connection.execute("SELECT DISTINCT ban_secs,blocked_until FROM offenders").fetchall(),
+                         [(60, 1120)])
+        cfg = make_cfg(detect_v6_rotation=True, v6_rotation_sources=2, v6_rotation_hits=2,
+                       action="tarpit", post_max_action="blackhole")
+        connection.execute("UPDATE offenders SET blackhole_until=2000")
+        previous = connection.execute("SELECT * FROM offenders ORDER BY ip").fetchall()
+        events = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        pending.clear()
+        store.activate_rotation(cfg, connection, "2001:db8:bad::/64", 1050, pending)
+        self.assertEqual(pending, set())
+        self.assertEqual(connection.execute("SELECT * FROM offenders ORDER BY ip").fetchall(), previous)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], events)
+
+    def test_ipv6_rotation_old_evidence_does_not_rewind_a_newer_ban_calculation(self):
+        cfg = make_cfg(detect_v6_rotation=True, v6_rotation_sources=2, v6_rotation_hits=2)
+        connection = store.db(cfg)
+        self.addCleanup(connection.close)
+        target = ("2001:db8::1", "tcp", 22)
+        store.record_many(cfg, connection, [(f"2001:db8:bad::{address}", "ipv6-rotation", "probe", 1000, 0, target)
+                                            for address in (1, 2)])
+        connection.execute("UPDATE offenders SET ban_secs=900,last_calc=1200,blocked_until=3000")
+        store.activate_rotation(cfg, connection, "2001:db8:bad::/64", 1001)
+        self.assertEqual(connection.execute("SELECT DISTINCT ban_secs,last_calc,blocked_until FROM offenders").fetchall(),
+                         [(900, 1200, 3000)])
 
     def test_portscan_counts_survive_a_database_reopen(self):
         with tempfile.TemporaryDirectory() as directory:

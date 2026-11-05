@@ -132,7 +132,8 @@ def ingest_fwlog(cfg, c, now, pending=None):
                 continue
         else:
             continue
-        if not detected and not (cfg.detect_portscan and p2[6] == "block"):
+        rotation = cfg.detect_v6_rotation and ver == "6" and protocol == "tcp" and p2[6] == "block"
+        if not detected and not (cfg.detect_portscan and p2[6] == "block") and not rotation:
             continue
         destination = f"[{dst}]:{dport_int}" if ver == "6" else f"{dst}:{dport_int}"
         if p2[6] == "pass":
@@ -145,8 +146,9 @@ def ingest_fwlog(cfg, c, now, pending=None):
                 continue
             events.append((src, "tarpit", f"tarpit knock: {probe} to {destination} on {cfg.wan_if}", ets))
         else:
-            scan_target = (dst, protocol, dport_int) if cfg.detect_portscan else None
-            events.append((src, source if detected else "portscan",
+            scan_target = (dst, protocol, dport_int) if cfg.detect_portscan or rotation else None
+            category = source if detected else ("portscan" if cfg.detect_portscan else "ipv6-rotation")
+            events.append((src, category,
                            f"{probe} to {destination} blocked on {cfg.wan_if}", ets, 0, scan_target))
     return store.record_many(cfg, c, events, pending)
 

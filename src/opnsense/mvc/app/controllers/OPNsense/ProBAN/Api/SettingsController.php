@@ -33,6 +33,11 @@ class SettingsController extends ApiControllerBase
             "detect_tcp_scan" => (int)((string)$mdl->detect_tcp_scan),
             "detect_tcp_invalid" => (int)((string)$mdl->detect_tcp_invalid),
             "detect_portscan" => (int)((string)$mdl->detect_portscan),
+            "detect_v6_rotation" => (int)((string)$mdl->detect_v6_rotation),
+            "v6_rotation_sources" => (int)((string)$mdl->v6_rotation_sources) ?: 8,
+            "v6_rotation_hits" => (int)((string)$mdl->v6_rotation_hits) ?: 40,
+            "v6_rotation_window" => (int)((string)$mdl->v6_rotation_window) ?: 300,
+            "v6_rotation_secs" => (int)((string)$mdl->v6_rotation_secs) ?: 600,
             "portscan_threshold" => (int)((string)$mdl->portscan_threshold) ?: 10,
             "portscan_window" => (int)((string)$mdl->portscan_window) ?: 60,
             "scan_threshold" => (int)((string)$mdl->scan_threshold) ?: 5,
@@ -84,6 +89,11 @@ class SettingsController extends ApiControllerBase
         $mdl->detect_tcp_scan = $req->getPost("detect_tcp_scan", "int", (int)((string)$mdl->detect_tcp_scan)) ? "1" : "0";
         $mdl->detect_tcp_invalid = $req->getPost("detect_tcp_invalid", "int", (int)((string)$mdl->detect_tcp_invalid)) ? "1" : "0";
         $mdl->detect_portscan = $req->getPost("detect_portscan", "int", (int)((string)$mdl->detect_portscan)) ? "1" : "0";
+        $mdl->detect_v6_rotation = $req->getPost("detect_v6_rotation", "int", (int)((string)$mdl->detect_v6_rotation)) ? "1" : "0";
+        $mdl->v6_rotation_sources = (string)max(2, (int)$req->getPost("v6_rotation_sources", "int", (int)((string)$mdl->v6_rotation_sources) ?: 8));
+        $mdl->v6_rotation_hits = (string)max((int)((string)$mdl->v6_rotation_sources), (int)$req->getPost("v6_rotation_hits", "int", (int)((string)$mdl->v6_rotation_hits) ?: 40));
+        $mdl->v6_rotation_window = (string)max(10, (int)$req->getPost("v6_rotation_window", "int", (int)((string)$mdl->v6_rotation_window) ?: 300));
+        $mdl->v6_rotation_secs = (string)max(60, (int)$req->getPost("v6_rotation_secs", "int", (int)((string)$mdl->v6_rotation_secs) ?: 600));
         $mdl->portscan_threshold = (string)max(2, (int)$req->getPost("portscan_threshold", "int", (int)((string)$mdl->portscan_threshold) ?: 10));
         $mdl->portscan_window = (string)max(1, (int)$req->getPost("portscan_window", "int", (int)((string)$mdl->portscan_window) ?: 60));
         $mdl->scan_threshold = (string)max(1, (int)$req->getPost("scan_threshold", "int", (int)((string)$mdl->scan_threshold) ?: 5));
