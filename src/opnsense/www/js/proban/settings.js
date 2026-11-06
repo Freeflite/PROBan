@@ -8,6 +8,9 @@ PROBAN.settings = (function () {
     function updateEnforceWarn() { $('#pbEnforceWarn').toggle($('#pbEnforce').prop('checked') && $('#pbEnabled').prop('checked')); }
     function updateDecayNote() { var a = parseFloat($('#pbDecayAmt').val()) || 1, i = parseFloat($('#pbDecayInt').val()) || 1; var rate = (a / i); $('#pbDecayNote').text(T.decayNote.replace('%RATE%', rate.toFixed(2)).replace('%DUR%', fmt.fmtDur((fmt.parseDur($('#pbMaxBan').val()) / a) * i))); }
     function updateBhUI() { $('#pbBhCfg').toggle($('input[name=pbPostMax]:checked').val() === 'blackhole'); updateBhNote(); }
+    function updateSuriUI() { $('#pbSuriPriorityCfg').toggle($('#pbSuriPriority').prop('checked')); }
+    function updatePortscanUI() { $('#pbPortscanCfg').toggle($('#pbDetectPortscan').prop('checked')); }
+    function updateV6RotationUI() { $('#pbV6RotationCfg').toggle($('#pbDetectV6Rotation').prop('checked')); }
     function updateBhNote() { if ($('input[name=pbPostMax]:checked').val() !== 'blackhole') { $('#pbBhNote').text(''); return; } var h = parseInt($('#pbBhHours').val(), 10) || 0, d = fmt.parseDur($('#pbBhDecay').val()) || 0; $('#pbBhNote').text(h && d ? T.bhNote.replace('%H%', h).replace('%AMT%', fmt.fmtDur(d)).replace('%TOTAL%', fmt.fmtDur(h * d)) : ''); }
 
     function open() {
@@ -24,9 +27,28 @@ PROBAN.settings = (function () {
             $('#pbDecayInt').val(d.decay_interval || 60);
             $('#pbEventRet').val(d.event_retention_days != null ? d.event_retention_days : 14);
             $('#pbAmnesia').val(d.offender_amnesia_days != null ? d.offender_amnesia_days : 30);
+            $('#pbHideExpired').prop('checked', d.hide_expired == 1);
             $('#pbAllow').val((d.allowlist || []).join('\n'));
             $('#pbSrcFw').prop('checked', !d.sources || d.sources.firewall != 0);
             $('#pbSrcSuri').prop('checked', !d.sources || d.sources.suricata != 0);
+            $('#pbDetectSyn').prop('checked', d.detect_syn != 0);
+            $('#pbDetectUdp').prop('checked', d.detect_udp == 1);
+            $('#pbDetectTcpScan').prop('checked', d.detect_tcp_scan == 1);
+            $('#pbDetectTcpInvalid').prop('checked', d.detect_tcp_invalid == 1);
+            $('#pbDetectPortscan').prop('checked', d.detect_portscan == 1);
+            $('#pbDetectV6Rotation').prop('checked', d.detect_v6_rotation == 1);
+            $('#pbV6RotationSources').val(d.v6_rotation_sources || 8);
+            $('#pbV6RotationHits').val(d.v6_rotation_hits || 40);
+            $('#pbV6RotationWindow').val(d.v6_rotation_window || 300);
+            $('#pbV6RotationMinimum').val(d.v6_rotation_secs || 600);
+            $('#pbPortscanThreshold').val(d.portscan_threshold || 10);
+            $('#pbPortscanWindow').val(d.portscan_window || 60);
+            $('#pbScanThreshold').val(d.scan_threshold || 5);
+            $('#pbScanWindow').val(d.scan_window || 60);
+            $('#pbSuriPriority').prop('checked', d.suricata_priority == 1);
+            $('#pbSuriSeverity').val(d.suricata_priority_severity || 1);
+            $('#pbSuriMinimum').val(d.suricata_priority_secs || 1800);
+            $('#pbSuriSids').val(d.suricata_priority_sids || '');
             pbTip = d.tarpit_ip || ''; pbTports = (d.tarpit_ports != null ? d.tarpit_ports : '');
             $('#pbWanIf').val(d.wan_if || '');
             $('#pbProtPorts').val(d.protected_ports || '');
@@ -36,7 +58,7 @@ PROBAN.settings = (function () {
             $('input[name=pbPostMax][value=' + ((d.post_max_action === 'blackhole') ? 'blackhole' : 'hold') + ']').prop('checked', true);
             $('#pbBhHours').val(d.blackhole_hours || 12);
             $('#pbBhDecay').val(fmt.fmtDur(d.blackhole_decay || 7200));
-            updateActionUI(); updateEnforceWarn(); updateDecayNote(); updateBhUI();
+            updateActionUI(); updateEnforceWarn(); updateDecayNote(); updateBhUI(); updateSuriUI(); updatePortscanUI(); updateV6RotationUI();
             $('#pbSettings').modal('show');
         });
     }
@@ -62,9 +84,28 @@ PROBAN.settings = (function () {
             decay_interval: parseInt($('#pbDecayInt').val(), 10) || 60,
             event_retention_days: parseInt($('#pbEventRet').val(), 10),
             offender_amnesia_days: parseInt($('#pbAmnesia').val(), 10),
+            hide_expired: $('#pbHideExpired').prop('checked') ? 1 : 0,
             allowlist: allow,
             src_firewall: $('#pbSrcFw').prop('checked') ? 1 : 0,
             src_suricata: $('#pbSrcSuri').prop('checked') ? 1 : 0,
+            detect_syn: $('#pbDetectSyn').prop('checked') ? 1 : 0,
+            detect_udp: $('#pbDetectUdp').prop('checked') ? 1 : 0,
+            detect_tcp_scan: $('#pbDetectTcpScan').prop('checked') ? 1 : 0,
+            detect_tcp_invalid: $('#pbDetectTcpInvalid').prop('checked') ? 1 : 0,
+            detect_portscan: $('#pbDetectPortscan').prop('checked') ? 1 : 0,
+            detect_v6_rotation: $('#pbDetectV6Rotation').prop('checked') ? 1 : 0,
+            v6_rotation_sources: parseInt($('#pbV6RotationSources').val(), 10) || 8,
+            v6_rotation_hits: Math.max(parseInt($('#pbV6RotationSources').val(), 10) || 8, parseInt($('#pbV6RotationHits').val(), 10) || 40),
+            v6_rotation_window: parseInt($('#pbV6RotationWindow').val(), 10) || 300,
+            v6_rotation_secs: parseInt($('#pbV6RotationMinimum').val(), 10) || 600,
+            portscan_threshold: parseInt($('#pbPortscanThreshold').val(), 10) || 10,
+            portscan_window: parseInt($('#pbPortscanWindow').val(), 10) || 60,
+            scan_threshold: parseInt($('#pbScanThreshold').val(), 10) || 5,
+            scan_window: parseInt($('#pbScanWindow').val(), 10) || 60,
+            suricata_priority: $('#pbSuriPriority').prop('checked') ? 1 : 0,
+            suricata_priority_severity: parseInt($('#pbSuriSeverity').val(), 10) || 1,
+            suricata_priority_secs: parseInt($('#pbSuriMinimum').val(), 10) || 1800,
+            suricata_priority_sids: $('#pbSuriSids').val().trim(),
             wan_if: $('#pbWanIf').val().trim(),
             protected_ports: $('#pbProtPorts').val().trim(),
             action: ($('input[name=pbAction]:checked').val() === 'tarpit') ? 'tarpit' : 'drop',
@@ -97,6 +138,9 @@ PROBAN.settings = (function () {
         $('#pbDecayAmt,#pbDecayInt,#pbMaxBan').on('input', updateDecayNote);
         $(document).on('change', 'input[name=pbPostMax]', updateBhUI);
         $('#pbBhHours,#pbBhDecay').on('input', updateBhNote);
+        $('#pbSuriPriority').on('change', updateSuriUI);
+        $('#pbDetectPortscan').on('change', updatePortscanUI);
+        $('#pbDetectV6Rotation').on('change', updateV6RotationUI);
         $('#pbSettingsBtn').on('click', open);
         $('#pbSaveBtn').on('click', save);
     }

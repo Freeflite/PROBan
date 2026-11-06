@@ -35,6 +35,29 @@ class Cfg:
         # so that real users connecting to them are not treated as "knocks" or probes.
         pp = g("protected_ports", "")
         self.protected_port_set = Cfg._parse_port_set(pp)
+        self.detect_syn = bool(g("detect_syn", True))
+        self.detect_udp = bool(g("detect_udp", False))
+        self.detect_tcp_scan = bool(g("detect_tcp_scan", False))
+        self.detect_tcp_invalid = bool(g("detect_tcp_invalid", False))
+        self.detect_portscan = bool(g("detect_portscan", False))
+        self.detect_v6_rotation = bool(g("detect_v6_rotation", False))
+        self.v6_rotation_sources = min(256, max(2, int(g("v6_rotation_sources", 8))))
+        self.v6_rotation_hits = min(100000, max(self.v6_rotation_sources, int(g("v6_rotation_hits", 40))))
+        self.v6_rotation_window = min(3600, max(10, int(g("v6_rotation_window", 300))))
+        self.v6_rotation_secs = min(86400, max(60, int(g("v6_rotation_secs", 600))))
+        self.portscan_threshold = min(65535, max(2, int(g("portscan_threshold", 10))))
+        self.portscan_window = min(3600, max(1, int(g("portscan_window", 60))))
+        self.scan_threshold = max(1, int(g("scan_threshold", 5)))
+        self.scan_window = max(1, int(g("scan_window", 60)))
+        self.suricata_priority = bool(g("suricata_priority", False))
+        self.suricata_priority_severity = min(3, max(1, int(g("suricata_priority_severity", 1))))
+        self.suricata_priority_secs = max(60, int(g("suricata_priority_secs", 1800)))
+        signature_ids = g("suricata_priority_sids", "")
+        if isinstance(signature_ids, str):
+            signature_ids = signature_ids.replace(",", " ").split()
+        if not isinstance(signature_ids, (list, tuple)):
+            signature_ids = []
+        self.suricata_priority_sids = {int(value) for value in signature_ids if str(value).isdigit() and int(value) > 0}
         self.grace = int(g("grace_hits", 1))
         self.step = float(g("step_secs", 30))
         self.mult = float(g("multiplier", 1.5))

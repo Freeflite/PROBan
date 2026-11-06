@@ -1,6 +1,7 @@
 <?php
 namespace OPNsense\ProBAN\Api;
 
+use OPNsense\ProBAN\General;
 use OPNsense\ProBAN\Helper;
 
 class OverviewController extends \OPNsense\Base\ApiControllerBase
@@ -12,6 +13,24 @@ class OverviewController extends \OPNsense\Base\ApiControllerBase
         $db = new \SQLite3($p, SQLITE3_OPEN_READONLY);
         $db->busyTimeout(3000);
         return $db;
+    }
+    private function eventHits($db)
+    {
+        $columns = $db->query("PRAGMA table_info(events)");
+        while ($column = $columns->fetchArray(SQLITE3_ASSOC)) {
+            if ($column['name'] === 'hits') return 'hits';
+        }
+        return '1';
+    }
+    private function offendersWhere($family = 0, $search = '')
+    {
+        $conditions = [];
+        $model = new General();
+        if ((string)$model->hide_expired === '1') $conditions[] = 'blocked_until > ' . time();
+        if ($family === 4) $conditions[] = "ip NOT LIKE '%:%'";
+        elseif ($family === 6) $conditions[] = "ip LIKE '%:%'";
+        if ($search !== '') $conditions[] = 'instr(lower(ip), lower(:search)) > 0';
+        return count($conditions) ? ' WHERE ' . implode(' AND ', $conditions) : '';
     }
     public function statsAction()
     {
@@ -27,13 +46,16 @@ class OverviewController extends \OPNsense\Base\ApiControllerBase
             $r = $db->query("SELECT level,COUNT(*) c FROM offenders WHERE ban_secs>0 GROUP BY level ORDER BY level");
             while ($x = $r->fetchArray(SQLITE3_ASSOC)) $levels[(string)$x['level']] = (int)$x['c'];
             $tamper = (string)@$db->querySingle("SELECT v FROM state WHERE k='tamper'");
+            $counterError = (string)$db->querySingle("SELECT v FROM state WHERE k='counter_error'");
+            $eventHits = $this->eventHits($db);
             $out = [
-                "total" => (int)$db->querySingle("SELECT COUNT(*) FROM offenders"),
+                "total" => (int)$db->querySingle("SELECT COUNT(*) FROM offenders" . $this->offendersWhere()),
                 "active" => (int)$db->querySingle("SELECT COUNT(*) FROM offenders WHERE ban_secs>0"),
-                "events24h" => (int)$db->querySingle("SELECT COUNT(*) FROM events WHERE ts > ".($now-86400)),
+                "events24h" => (int)$db->querySingle("SELECT COALESCE(SUM({$eventHits}),0) FROM events WHERE ts > ".($now-86400)),
                 "mode" => $mode,
                 "levels" => $levels,
-                "tamper" => $tamper
+                "tamper" => $tamper,
+                "counter_error" => $counterError
             ];
             $db->close();
             return $out;
@@ -50,29 +72,32 @@ class OverviewController extends \OPNsense\Base\ApiControllerBase
             $sort = $this->request->getQuery('sort', 'string', 'ban_secs');
             $dir = (int)$this->request->getQuery('dir', 'int', -1);
             $family = (int)$this->request->getQuery('family', 'int', 0);
+            $search = trim((string)$this->request->getQuery('search', 'string', ''));
 
-            $allowedSort = ['ip', 'hits', 'ban_secs', 'level', 'blocked_until'];
+            $allowedSort = ['ip', 'hits', 'last_seen', 'ban_secs', 'level', 'blocked_until'];
             if (!in_array($sort, $allowedSort)) $sort = 'ban_secs';
             $order = $dir < 0 ? 'DESC' : 'ASC';
 
-            $where = '';
-            if ($family === 4) {
-                $where = " WHERE ip NOT LIKE '%:%' ";
-            } elseif ($family === 6) {
-                $where = " WHERE ip LIKE '%:%' ";
-            }
+            $where = $this->offendersWhere($family, $search);
 
-            $total = (int)$db->querySingle("SELECT COUNT(*) FROM offenders" . $where);
+            $count = $db->prepare("SELECT COUNT(*) FROM offenders" . $where);
+            if ($search !== '') $count->bindValue(':search', $search, SQLITE3_TEXT);
+            $total = (int)$count->execute()->fetchArray(SQLITE3_NUM)[0];
 
             if ($limit <= 0 || $limit > 10000) $limit = 10000;
             if ($offset < 0) $offset = 0;
 
-            $sql = "SELECT ip,hits,ban_secs,level,blocked_until,reasons FROM offenders" . $where . " ORDER BY $sort $order LIMIT $limit OFFSET $offset";
-            $r = $db->query($sql);
+            $sql = "SELECT ip,hits,last_seen,ban_secs,level,blocked_until,reasons FROM offenders" . $where . " ORDER BY $sort $order LIMIT $limit OFFSET $offset";
+            $statement = $db->prepare($sql);
+            if ($search !== '') $statement->bindValue(':search', $search, SQLITE3_TEXT);
+            $r = $statement->execute();
             $rows = [];
             while ($x = $r->fetchArray(SQLITE3_ASSOC)) {
                 $l = array_values(array_filter(explode("\n", (string)$x['reasons'])));
-                $x['last_reason'] = count($l) ? end($l) : "";
+                $detected = array_values(array_filter($l, static function ($reason) {
+                    return strpos($reason, "pf:") !== 0;
+                }));
+                $x['last_reason'] = count($detected) ? end($detected) : (count($l) ? end($l) : "");
                 $x['ban_secs'] = (int)round($x['ban_secs']);
                 unset($x['reasons']); $rows[] = $x;
             }
@@ -89,7 +114,8 @@ class OverviewController extends \OPNsense\Base\ApiControllerBase
             $start = $end - $window;
             $db = $this->db();
             if ($db === null) return ["buckets"=>[],"bucket"=>$bucket,"window"=>$window,"end"=>$end];
-            $s = $db->prepare("SELECT (ts/$bucket)*$bucket h, COUNT(*) c FROM events WHERE ts >= :a AND ts < :b GROUP BY h");
+            $eventHits = $this->eventHits($db);
+            $s = $db->prepare("SELECT (ts/$bucket)*$bucket h, SUM({$eventHits}) c FROM events WHERE ts >= :a AND ts < :b GROUP BY h");
             $s->bindValue(":a", $start, SQLITE3_INTEGER);
             $s->bindValue(":b", $end, SQLITE3_INTEGER);
             $r = $s->execute();
@@ -104,14 +130,28 @@ class OverviewController extends \OPNsense\Base\ApiControllerBase
     public function eventsAction($ip = null)
     {
         try {
+            $limit = max(1, min(500, (int)$this->request->getQuery('limit', 'int', 100)));
+            $offset = max(0, (int)$this->request->getQuery('offset', 'int', 0));
+            $through = max(0, (int)$this->request->getQuery('through', 'int', 0));
+            if ($ip === null) $ip = trim((string)$this->request->getQuery('ip', 'string', ''));
             $db = $this->db();
-            if ($db === null || $ip === null) return ["rows"=>[]];
-            $s = $db->prepare("SELECT ts,source,reason FROM events WHERE ip=:ip ORDER BY ts DESC LIMIT 100");
+            if ($db === null || $ip === '') return ["ip"=>$ip,"rows"=>[],"total"=>0,"limit"=>$limit,"offset"=>$offset,"through"=>$through];
+            $count = $db->prepare("SELECT COUNT(*) total,COALESCE(MAX(rowid),0) latest FROM events WHERE ip=:ip" . ($through > 0 ? " AND rowid<=:through" : ""));
+            $count->bindValue(':ip', $ip, SQLITE3_TEXT);
+            if ($through > 0) $count->bindValue(':through', $through, SQLITE3_INTEGER);
+            $summary = $count->execute()->fetchArray(SQLITE3_ASSOC);
+            $total = (int)$summary['total'];
+            if ($through === 0) $through = (int)$summary['latest'];
+            $eventHits = $this->eventHits($db);
+            $s = $db->prepare("SELECT ts,source,reason,{$eventHits} AS hits FROM events WHERE ip=:ip AND rowid<=:through ORDER BY ts DESC,rowid DESC LIMIT :limit OFFSET :offset");
             $s->bindValue(":ip", $ip, SQLITE3_TEXT);
+            $s->bindValue(':through', $through, SQLITE3_INTEGER);
+            $s->bindValue(':limit', $limit, SQLITE3_INTEGER);
+            $s->bindValue(':offset', $offset, SQLITE3_INTEGER);
             $r = $s->execute(); $rows = [];
             while ($x = $r->fetchArray(SQLITE3_ASSOC)) $rows[] = $x;
             $db->close();
-            return ["ip"=>$ip, "rows"=>$rows];
+            return ["ip"=>$ip,"rows"=>$rows,"total"=>$total,"limit"=>$limit,"offset"=>$offset,"through"=>$through];
         } catch (\Throwable $e) { return ["ip"=>$ip,"rows"=>[],"skip"=>true]; }
     }
     // TCP connect-probe the tarpit/honeypot target so a mode swap can't silently redirect into a void.

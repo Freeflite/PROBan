@@ -9,6 +9,11 @@ PROBAN.dashboard = (function () {
     var pbPage = 0;
     var pbFamily = 0; // 0=both, 4=IPv4, 6=IPv6
     var pbTotal = 0;
+    var pbSearch = '';
+    var pbOffendersRequest = 0;
+    var refreshErrors = {stats: false, offenders: false};
+    var pbHistoryIP = '', pbHistoryOffset = 0, pbHistoryTotal = 0, pbHistoryThrough = 0;
+    var pbHistoryRequest = 0;
 
     function loadPersisted() {
         try {
@@ -96,7 +101,7 @@ PROBAN.dashboard = (function () {
         $.each(rows, function (i, r) {
             var until = (r.blocked_until * 1000 > Date.now()) ? fmt.ftime(r.blocked_until) : '<span class="text-muted">' + T.expired + '</span>';
             var badge = (r.level > 0) ? '<span class="tierbadge" style="background:' + fmt.tcolor(r.level) + '">L' + r.level + '</span>' : '<span class="text-muted">-</span>';
-            var tr = $('<tr></tr>').html('<td>' + $('<div>').text(r.ip).html() + '</td><td>' + r.hits + '</td><td>' + fmt.fmtDur(r.ban_secs) + '</td><td>' + badge + '</td><td>' + until + '</td><td><small>' + $('<div>').text(r.last_reason || '').html() + '</small></td>');
+            var tr = $('<tr></tr>').html('<td>' + $('<div>').text(r.ip).html() + '</td><td>' + r.hits + '</td><td>' + (r.last_seen ? fmt.ftime(r.last_seen) : '-') + '</td><td>' + fmt.fmtDur(r.ban_secs) + '</td><td>' + badge + '</td><td>' + until + '</td><td><small>' + $('<div>').text(r.last_reason || '').html() + '</small></td>');
             tr.on('click', function () { drill(r.ip); });
             tb.append(tr);
         });
@@ -119,12 +124,18 @@ PROBAN.dashboard = (function () {
             info.text(start + '-' + end + ' of ' + pbTotal);
         }
     }
+    function refreshStatus(source, failed) {
+        refreshErrors[source] = failed;
+        $('#pbRefreshError').toggle(refreshErrors.stats || refreshErrors.offenders);
+    }
     function load() {
         api.stats(function (d) {
-            if (!d) return;
+            refreshStatus('stats', !d || !!d.skip);
+            if (!d || d.skip) return;
             $('#pb-total').text(d.total || 0); $('#pb-active').text(d.active || 0); $('#pb-events').text(d.events24h || 0);
             $('#pb-mode').text(d.mode || '-').css('color', d.mode === 'enforcing' ? '#c62828' : (d.mode === 'disabled' ? '#999' : '#ff9800'));
             if (d.tamper) { $('#pbTamperIp').text(d.tamper); $('#pbTamper').show(); } else { $('#pbTamper').hide(); }
+            if (d.counter_error) { $('#pbCounterErrorText').text(d.counter_error); $('#pbCounterError').show(); } else { $('#pbCounterError').hide(); }
             var L = [], V = [], C = []; $.each(d.levels || {}, function (t, c) { if (parseInt(t) > 0) { L.push('L' + t); V.push(c); C.push(fmt.tcolor(parseInt(t))); } });
             if (window.Chart) { if (chTi) chTi.destroy(); chTi = new Chart(document.getElementById('pbTiers'), {type: 'doughnut', data: {labels: L, datasets: [{data: V, backgroundColor: C}]}, options: {maintainAspectRatio: false, plugins: {legend: {position: 'bottom'}}}}); }
         });
@@ -139,6 +150,7 @@ PROBAN.dashboard = (function () {
     }
 
     function loadOffenders() {
+        var request = ++pbOffendersRequest;
         var limit = (pbPageSize === 'all' || pbPageSize <= 0) ? 0 : pbPageSize;
         var offset = (pbPageSize === 'all' || pbPageSize <= 0) ? 0 : pbPage * pbPageSize;
         var params = {
@@ -146,14 +158,22 @@ PROBAN.dashboard = (function () {
             offset: offset,
             sort: pbSort.k,
             dir: pbSort.dir,
-            family: pbFamily
+            family: pbFamily,
+            search: pbSearch
         };
         api.offenders(params, function (d) {
+            if (request !== pbOffendersRequest) return;
+            refreshStatus('offenders', !d || !!d.skip);
+            if (!d || d.skip) return;
             pbRows = (d && d.rows) || [];
             pbTotal = (d && d.total) || 0;
-            if (pbPageSize !== 'all' && pbPageSize > 0 && pbTotal > 0) {
-                var maxPage = Math.ceil(pbTotal / pbPageSize) - 1;
-                if (pbPage > maxPage) pbPage = Math.max(0, maxPage);
+            if (pbPageSize !== 'all' && pbPageSize > 0) {
+                var maxPage = Math.max(0, Math.ceil(pbTotal / pbPageSize) - 1);
+                if (pbPage > maxPage) {
+                    pbPage = maxPage;
+                    loadOffenders();
+                    return;
+                }
             }
             renderOffenders();
             // update sort indicators (server sorted)
@@ -162,17 +182,63 @@ PROBAN.dashboard = (function () {
             $('#pbTbl thead th.pbsort[data-k="' + k + '"] .pbcar').html(dir < 0 ? '▼' : '▲');
         });
     }
-    function drill(ip) {
-        $('#pbModalTitle').text(T.offender + ': ' + ip); $('#pbModalBody').empty();
-        api.events(ip, function (d) {
-            $.each((d && d.rows) || [], function (i, e) { $('#pbModalBody').append('<tr><td>' + fmt.ftime(e.ts) + '</td><td>' + e.source + '</td><td>' + $('<div>').text(e.reason).html() + '</td></tr>'); });
+    function searchOffenders() {
+        var search = $('#pbSearch').val().trim();
+        if (search === pbSearch) return;
+        pbSearch = search;
+        pbPage = 0;
+        $('#pbSearchClear').prop('disabled', !search);
+        loadOffenders();
+    }
+    function historyButtons() {
+        $('#pbHistoryRefresh').prop('disabled', false);
+        $('#pbHistoryPrev').prop('disabled', pbHistoryOffset <= 0);
+        $('#pbHistoryNext').prop('disabled', pbHistoryOffset + 100 >= pbHistoryTotal);
+    }
+    function loadHistory(offset, resetSnapshot) {
+        var request = ++pbHistoryRequest;
+        $('#pbHistoryError').hide();
+        $('#pbHistoryPrev,#pbHistoryNext,#pbHistoryRefresh').prop('disabled', true);
+        api.events(pbHistoryIP, {limit: 100, offset: offset, through: resetSnapshot ? 0 : pbHistoryThrough}, function (d) {
+            if (request !== pbHistoryRequest) return;
+            if (!d || d.skip) {
+                $('#pbHistoryError').show();
+                historyButtons();
+                return;
+            }
+            pbHistoryTotal = d.total || 0;
+            pbHistoryThrough = d.through || 0;
+            var maxOffset = Math.max(0, Math.ceil(pbHistoryTotal / 100) - 1) * 100;
+            if (offset > maxOffset) { loadHistory(maxOffset); return; }
+            pbHistoryOffset = offset;
+            var rows = d.rows || [];
+            $('#pbModalBody').empty();
+            $.each(rows, function (i, e) { $('#pbModalBody').append('<tr><td>' + fmt.ftime(e.ts) + '</td><td>' + $('<div>').text(e.source).html() + '</td><td>' + (e.hits || 1) + '</td><td>' + $('<div>').text(e.reason).html() + '</td></tr>'); });
+            $('#pbHistoryInfo').text(pbHistoryTotal ? (offset + 1) + '-' + Math.min(offset + rows.length, pbHistoryTotal) + ' of ' + pbHistoryTotal : '0 total');
+            $('#pbModal .modal-body').scrollTop(0);
+            historyButtons();
         });
+    }
+    function drill(ip) {
+        pbHistoryIP = ip; pbHistoryOffset = 0; pbHistoryTotal = 0; pbHistoryThrough = 0;
+        $('#pbModalTitle').text(T.offender + ': ' + ip); $('#pbModalBody').empty();
+        $('#pbHistoryInfo').text('');
+        loadHistory(0);
         $('#pbModal').modal('show');
     }
     function init() {
         $('#pbNav').on('click', 'button', function () { tlPan(parseInt($(this).attr('data-d'), 10)); });
         $('#pbRes').on('click', 'button', function () { tlRes(parseInt($(this).attr('data-s'), 10)); });
         $('#pbWin').on('click', 'button', function () { tlWin(parseInt($(this).attr('data-s'), 10)); });
+        $('#pbSearch').on('input search', debounce(searchOffenders, 250));
+        $('#pbSearchClear').on('click', function () {
+            $('#pbSearch').val('').focus();
+            searchOffenders();
+        });
+        $('#pbHistoryPrev').on('click', function () { loadHistory(Math.max(0, pbHistoryOffset - 100)); });
+        $('#pbHistoryNext').on('click', function () { loadHistory(pbHistoryOffset + 100); });
+        $('#pbHistoryRefresh').on('click', function () { loadHistory(0, true); });
+        $('#pbModal').on('hidden.bs.modal', function () { pbHistoryRequest++; });
 
         // Re-wire click-to-sort (server-side now)
         $(document).on('click', '#pbTbl thead th.pbsort', function () {

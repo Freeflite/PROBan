@@ -28,6 +28,24 @@ class SettingsController extends ApiControllerBase
             "dry_run" => (int)((string)$mdl->dry_run),
             "wan_if" => (string)$mdl->wan_if,
             "protected_ports" => (string)$mdl->protected_ports,
+            "detect_syn" => ((string)$mdl->detect_syn === "0") ? 0 : 1,
+            "detect_udp" => (int)((string)$mdl->detect_udp),
+            "detect_tcp_scan" => (int)((string)$mdl->detect_tcp_scan),
+            "detect_tcp_invalid" => (int)((string)$mdl->detect_tcp_invalid),
+            "detect_portscan" => (int)((string)$mdl->detect_portscan),
+            "detect_v6_rotation" => (int)((string)$mdl->detect_v6_rotation),
+            "v6_rotation_sources" => (int)((string)$mdl->v6_rotation_sources) ?: 8,
+            "v6_rotation_hits" => (int)((string)$mdl->v6_rotation_hits) ?: 40,
+            "v6_rotation_window" => (int)((string)$mdl->v6_rotation_window) ?: 300,
+            "v6_rotation_secs" => (int)((string)$mdl->v6_rotation_secs) ?: 600,
+            "portscan_threshold" => (int)((string)$mdl->portscan_threshold) ?: 10,
+            "portscan_window" => (int)((string)$mdl->portscan_window) ?: 60,
+            "scan_threshold" => (int)((string)$mdl->scan_threshold) ?: 5,
+            "scan_window" => (int)((string)$mdl->scan_window) ?: 60,
+            "suricata_priority" => (int)((string)$mdl->suricata_priority),
+            "suricata_priority_severity" => (int)((string)$mdl->suricata_priority_severity) ?: 1,
+            "suricata_priority_secs" => (int)((string)$mdl->suricata_priority_secs) ?: 1800,
+            "suricata_priority_sids" => (string)$mdl->suricata_priority_sids,
             "grace_hits" => (int)((string)$mdl->grace_hits),
             "step_secs" => (int)((string)$mdl->step_secs),
             "multiplier" => (float)((string)$mdl->multiplier),
@@ -36,6 +54,7 @@ class SettingsController extends ApiControllerBase
             "decay_interval" => (int)((string)$mdl->decay_interval),
             "event_retention_days" => (int)((string)$mdl->event_retention_days),
             "offender_amnesia_days" => (int)((string)$mdl->offender_amnesia_days),
+            "hide_expired" => (int)((string)$mdl->hide_expired),
             "allowlist" => $allow,
             "sources" => [
                 "firewall" => (int)((string)$mdl->src_firewall),
@@ -65,6 +84,24 @@ class SettingsController extends ApiControllerBase
         $mdl->dry_run = $req->getPost("dry_run", "int", 1) ? "1" : "0";
         $mdl->wan_if = trim((string)$req->getPost("wan_if", "string", ""));
         $mdl->protected_ports = trim((string)$req->getPost("protected_ports", "string", ""));
+        $mdl->detect_syn = $req->getPost("detect_syn", "int", ((string)$mdl->detect_syn === "0") ? 0 : 1) ? "1" : "0";
+        $mdl->detect_udp = $req->getPost("detect_udp", "int", (int)((string)$mdl->detect_udp)) ? "1" : "0";
+        $mdl->detect_tcp_scan = $req->getPost("detect_tcp_scan", "int", (int)((string)$mdl->detect_tcp_scan)) ? "1" : "0";
+        $mdl->detect_tcp_invalid = $req->getPost("detect_tcp_invalid", "int", (int)((string)$mdl->detect_tcp_invalid)) ? "1" : "0";
+        $mdl->detect_portscan = $req->getPost("detect_portscan", "int", (int)((string)$mdl->detect_portscan)) ? "1" : "0";
+        $mdl->detect_v6_rotation = $req->getPost("detect_v6_rotation", "int", (int)((string)$mdl->detect_v6_rotation)) ? "1" : "0";
+        $mdl->v6_rotation_sources = (string)max(2, (int)$req->getPost("v6_rotation_sources", "int", (int)((string)$mdl->v6_rotation_sources) ?: 8));
+        $mdl->v6_rotation_hits = (string)max((int)((string)$mdl->v6_rotation_sources), (int)$req->getPost("v6_rotation_hits", "int", (int)((string)$mdl->v6_rotation_hits) ?: 40));
+        $mdl->v6_rotation_window = (string)max(10, (int)$req->getPost("v6_rotation_window", "int", (int)((string)$mdl->v6_rotation_window) ?: 300));
+        $mdl->v6_rotation_secs = (string)max(60, (int)$req->getPost("v6_rotation_secs", "int", (int)((string)$mdl->v6_rotation_secs) ?: 600));
+        $mdl->portscan_threshold = (string)max(2, (int)$req->getPost("portscan_threshold", "int", (int)((string)$mdl->portscan_threshold) ?: 10));
+        $mdl->portscan_window = (string)max(1, (int)$req->getPost("portscan_window", "int", (int)((string)$mdl->portscan_window) ?: 60));
+        $mdl->scan_threshold = (string)max(1, (int)$req->getPost("scan_threshold", "int", (int)((string)$mdl->scan_threshold) ?: 5));
+        $mdl->scan_window = (string)max(1, (int)$req->getPost("scan_window", "int", (int)((string)$mdl->scan_window) ?: 60));
+        $mdl->suricata_priority = $req->getPost("suricata_priority", "int", (int)((string)$mdl->suricata_priority)) ? "1" : "0";
+        $mdl->suricata_priority_severity = (string)max(1, (int)$req->getPost("suricata_priority_severity", "int", (int)((string)$mdl->suricata_priority_severity) ?: 1));
+        $mdl->suricata_priority_secs = (string)max(60, (int)$req->getPost("suricata_priority_secs", "int", (int)((string)$mdl->suricata_priority_secs) ?: 1800));
+        $mdl->suricata_priority_sids = trim((string)$req->getPost("suricata_priority_sids", "string", (string)$mdl->suricata_priority_sids));
         $mdl->grace_hits = (string)max(1, (int)$req->getPost("grace_hits", "int", 1));
         $mdl->step_secs = (string)max(1, (int)$req->getPost("step_secs", "int", 30));
         $mult = (float)$req->getPost("multiplier", null, "1.5");
@@ -79,6 +116,7 @@ class SettingsController extends ApiControllerBase
         $mdl->decay_interval = (string)max(1, (int)$req->getPost("decay_interval", "int", 60));
         $mdl->event_retention_days = (string)max(0, (int)$req->getPost("event_retention_days", "int", 14));
         $mdl->offender_amnesia_days = (string)max(0, (int)$req->getPost("offender_amnesia_days", "int", 30));
+        $mdl->hide_expired = $req->getPost("hide_expired", "int", (int)((string)$mdl->hide_expired)) ? "1" : "0";
 
         $al = $req->getPost("allowlist");
         if (is_array($al)) {

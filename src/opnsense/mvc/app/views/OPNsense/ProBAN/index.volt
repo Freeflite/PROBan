@@ -5,6 +5,8 @@
   <button type="button" class="btn btn-default btn-sm" id="pbSettingsBtn"><i class="fa fa-cog"></i> {{ lang._('Settings') }}</button>
 </div>
 <div id="pbTamper" class="alert alert-danger" style="display:none;"><i class="fa fa-exclamation-triangle"></i> <b>{{ lang._('TAMPER DETECTED') }}</b> &mdash; {{ lang._('the tarpit redirect was pointed at a public IP') }} (<span id="pbTamperIp"></span>). {{ lang._('The block table has been flushed to prevent outbound reflection. Fix the target to a private/LAN address in Settings.') }}</div>
+<div id="pbRefreshError" class="alert alert-warning" role="status" style="display:none;"><i class="fa fa-exclamation-triangle"></i> {{ lang._('Dashboard refresh delayed. The last available data is retained.') }}</div>
+<div id="pbCounterError" class="alert alert-warning" style="display:none;"><i class="fa fa-exclamation-triangle"></i> <b>{{ lang._('PF counters unavailable') }}</b>: <span id="pbCounterErrorText"></span></div>
 <div class="row">
   <div class="col-xs-3"><div class="content-box pb-card"><div class="n" id="pb-total">-</div><div class="l">{{ lang._('Offenders') }}</div></div></div>
   <div class="col-xs-3"><div class="content-box pb-card"><div class="n" id="pb-active">-</div><div class="l">{{ lang._('Active Blocks') }}</div></div></div>
@@ -43,6 +45,11 @@
 <div class="content-box" style="padding:15px;">
   <b>{{ lang._('Offenders') }}</b> <small class="text-muted">- {{ lang._('click a row for its full history') }}</small>
   <div style="margin:6px 0; display:flex; gap:14px; align-items:center; flex-wrap:wrap; font-size:11px;">
+    <div class="input-group input-group-sm" style="width:240px;max-width:100%;">
+      <label class="sr-only" for="pbSearch">{{ lang._('Search IP or prefix') }}</label>
+      <input type="search" class="form-control" id="pbSearch" placeholder="{{ lang._('Search IP or prefix') }}" autocomplete="off" spellcheck="false">
+      <span class="input-group-btn"><button type="button" class="btn btn-default" id="pbSearchClear" title="{{ lang._('Clear search') }}" aria-label="{{ lang._('Clear search') }}" disabled><i class="fa fa-times" aria-hidden="true"></i></button></span>
+    </div>
     <span>
       <small class="text-muted">{{ lang._('IPv') }}</small>
       <div class="btn-group btn-group-xs" id="pbFamily" style="vertical-align:middle;">
@@ -68,14 +75,25 @@
       <button type="button" class="btn btn-default" id="pbNext" title="{{ lang._('next') }}"><i class="fa fa-chevron-right"></i></button>
     </div>
   </div>
+  <div class="table-responsive">
   <table class="table table-striped table-condensed" id="pbTbl" style="margin-top:8px;">
-    <thead><tr><th class="pbsort" data-k="ip">{{ lang._('Source IP') }} <span class="pbcar"></span></th><th class="pbsort" data-k="hits">{{ lang._('Hits') }} <span class="pbcar"></span></th><th class="pbsort" data-k="ban_secs">{{ lang._('Ban') }} <span class="pbcar"></span></th><th class="pbsort" data-k="level">{{ lang._('Level') }} <span class="pbcar"></span></th><th class="pbsort" data-k="blocked_until">{{ lang._('Blocked until') }} <span class="pbcar"></span></th><th>{{ lang._('Latest reason') }}</th></tr></thead>
+    <thead><tr><th class="pbsort" data-k="ip">{{ lang._('Source IP') }} <span class="pbcar"></span></th><th class="pbsort" data-k="hits">{{ lang._('Hits') }} <span class="pbcar"></span></th><th class="pbsort" data-k="last_seen">{{ lang._('Last seen') }} <span class="pbcar"></span></th><th class="pbsort" data-k="ban_secs">{{ lang._('Ban') }} <span class="pbcar"></span></th><th class="pbsort" data-k="level">{{ lang._('Level') }} <span class="pbcar"></span></th><th class="pbsort" data-k="blocked_until">{{ lang._('Blocked until') }} <span class="pbcar"></span></th><th>{{ lang._('Latest reason') }}</th></tr></thead>
     <tbody></tbody>
   </table>
+  </div>
 </div>
 <div class="modal fade" id="pbModal" tabindex="-1"><div class="modal-dialog modal-lg"><div class="modal-content">
   <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title" id="pbModalTitle">{{ lang._('Offender') }}</h4></div>
-  <div class="modal-body"><table class="table table-condensed"><thead><tr><th style="width:180px">{{ lang._('Time') }}</th><th style="width:90px">{{ lang._('Source') }}</th><th>{{ lang._('Reason') }}</th></tr></thead><tbody id="pbModalBody"></tbody></table></div>
+  <div class="modal-body" style="max-height:60vh;overflow-y:auto;">
+    <div id="pbHistoryError" class="alert alert-warning" role="status" style="display:none;"><i class="fa fa-exclamation-triangle"></i> {{ lang._('History temporarily unavailable. The last available data is retained.') }}</div>
+    <div class="table-responsive"><table class="table table-condensed"><thead><tr><th style="width:180px">{{ lang._('Time') }}</th><th style="width:90px">{{ lang._('Source') }}</th><th>{{ lang._('Hits') }}</th><th>{{ lang._('Reason') }}</th></tr></thead><tbody id="pbModalBody"></tbody></table></div>
+  </div>
+  <div class="modal-footer" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <button type="button" class="btn btn-default btn-sm" id="pbHistoryRefresh" title="{{ lang._('Refresh history') }}" aria-label="{{ lang._('Refresh history') }}" disabled><i class="fa fa-refresh" aria-hidden="true"></i></button>
+    <span id="pbHistoryInfo" role="status" style="margin-right:auto;"></span>
+    <button type="button" class="btn btn-default btn-sm" id="pbHistoryPrev" title="{{ lang._('Previous events') }}" aria-label="{{ lang._('Previous events') }}" disabled><i class="fa fa-chevron-left" aria-hidden="true"></i></button>
+    <button type="button" class="btn btn-default btn-sm" id="pbHistoryNext" title="{{ lang._('Next events') }}" aria-label="{{ lang._('Next events') }}" disabled><i class="fa fa-chevron-right" aria-hidden="true"></i></button>
+  </div>
 </div></div></div>
 <div class="modal fade" id="pbSettings" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
   <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-cog"></i> {{ lang._('ProBAN Settings') }}</h4></div>
@@ -99,10 +117,9 @@
         <div style="margin-top:10px;border-top:1px dashed #ccc;padding-top:8px;">
           <label style="font-size:11px;display:block;margin-bottom:2px;">{{ lang._('IPv6') }} <small class="text-muted">{{ lang._('(optional — blank keeps IPv6 block-only)') }}</small></label>
           <div class="row">
-            <div class="col-xs-8"><label style="font-size:11px;">{{ lang._('IPv6 tarpit target (ULA)') }}</label><input type="text" class="form-control input-sm" id="pbTip6In" placeholder="fd00:66::10"></div>
-            <div class="col-xs-4"><label style="font-size:11px;">{{ lang._('Collapse /64 at') }}</label><input type="number" min="0" class="form-control input-sm" id="pbV6Agg" placeholder="4"></div>
+            <div class="col-xs-12"><label style="font-size:11px;">{{ lang._('IPv6 tarpit target (ULA)') }}</label><input type="text" class="form-control input-sm" id="pbTip6In" placeholder="fd00:66::10"></div>
           </div>
-          <small class="text-muted">{{ lang._('Set a ULA target to tarpit/honeypot IPv6 the same as IPv4. Bans individual /128s, escalating to the whole /64 once this many distinct offenders show up in it (0 = never — /128 only, safest for shared-hosting /64s).') }}</small>
+          <small class="text-muted">{{ lang._('Set a ULA target to tarpit/honeypot IPv6 the same as IPv4.') }}</small>
         </div>
         <div style="margin-top:10px;border-top:1px dashed #ccc;padding-top:8px;">
           <label style="font-size:11px;display:block;margin-bottom:2px;">{{ lang._('When an offender hits max ban') }}</label>
@@ -138,11 +155,48 @@
     </div>
     <div class="pb-sect">
       <div class="h">{{ lang._('Detection sources') }}</div>
-      <label class="checkbox-inline"><input type="checkbox" id="pbSrcFw"> {{ lang._('Firewall SYN probes') }}</label>
+      <label class="checkbox-inline"><input type="checkbox" id="pbSrcFw"> {{ lang._('Firewall log') }}</label>
       <label class="checkbox-inline"><input type="checkbox" id="pbSrcSuri"> {{ lang._('Suricata alerts') }}</label>
+      <div style="margin-top:8px;">
+        <label class="checkbox-inline"><input type="checkbox" id="pbDetectSyn" checked> {{ lang._('TCP SYN') }}</label>
+        <label class="checkbox-inline"><input type="checkbox" id="pbDetectUdp"> {{ lang._('UDP') }}</label>
+        <label class="checkbox-inline"><input type="checkbox" id="pbDetectTcpScan"> {{ lang._('TCP FIN / NULL / XMAS') }}</label>
+      </div>
+      <div class="checkbox"><label><input type="checkbox" id="pbDetectTcpInvalid"> {{ lang._('TCP SYN+FIN / SYN+RST') }}</label></div>
+      <div class="row" style="margin-top:8px;">
+        <div class="col-xs-6"><label for="pbScanThreshold" style="font-size:11px;">{{ lang._('UDP / TCP-flag hits per source IP') }}</label><input type="number" min="1" max="1000" class="form-control input-sm" id="pbScanThreshold" value="5"></div>
+        <div class="col-xs-6"><label for="pbScanWindow" style="font-size:11px;">{{ lang._('Scan window (seconds)') }}</label><input type="number" min="1" max="3600" class="form-control input-sm" id="pbScanWindow" value="60"></div>
+      </div>
+      <div class="checkbox"><label><input type="checkbox" id="pbDetectPortscan"> {{ lang._('Portscan detection (distinct ports)') }}</label></div>
+      <div class="row" id="pbPortscanCfg" style="display:none;margin-top:8px;">
+        <div class="col-xs-6"><label for="pbPortscanThreshold" style="font-size:11px;" title="{{ lang._('Counted separately per source IP, destination IP and protocol.') }}">{{ lang._('Distinct destination ports') }}</label><input type="number" min="2" max="65535" class="form-control input-sm" id="pbPortscanThreshold" value="10"></div>
+        <div class="col-xs-6"><label for="pbPortscanWindow" style="font-size:11px;">{{ lang._('Portscan window (seconds)') }}</label><input type="number" min="1" max="3600" class="form-control input-sm" id="pbPortscanWindow" value="60"></div>
+      </div>
+      <div class="checkbox"><label title="{{ lang._('Correlate blocked WAN TCP probes from multiple IPv6 sources in the same /64. Shared networks and spoofed sources can cause false positives.') }}"><input type="checkbox" id="pbDetectV6Rotation"> {{ lang._('IPv6 source-rotation detection') }}</label></div>
+      <div id="pbV6RotationCfg" style="display:none;">
+        <div class="row">
+          <div class="col-xs-6"><label for="pbV6RotationSources" style="font-size:11px;">{{ lang._('Distinct sources per /64') }}</label><input type="number" min="2" max="256" class="form-control input-sm" id="pbV6RotationSources" value="8"></div>
+          <div class="col-xs-6"><label for="pbV6RotationHits" style="font-size:11px;">{{ lang._('TCP probes per /64') }}</label><input type="number" min="2" max="100000" class="form-control input-sm" id="pbV6RotationHits" value="40"></div>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <div class="col-xs-6"><label for="pbV6RotationWindow" style="font-size:11px;">{{ lang._('Correlation window (seconds)') }}</label><input type="number" min="10" max="3600" class="form-control input-sm" id="pbV6RotationWindow" value="300"></div>
+          <div class="col-xs-6"><label for="pbV6RotationMinimum" style="font-size:11px;">{{ lang._('Minimum ban (seconds)') }}</label><input type="number" min="60" max="86400" class="form-control input-sm" id="pbV6RotationMinimum" value="600"></div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <div class="col-xs-6"><label for="pbV6Agg" style="font-size:11px;" title="{{ lang._('Distinct banned /128s before a whole-/64 ban. 0 disables aggregation; safest for shared-hosting /64s. Allowlist overlaps always prevent subnet bans.') }}">{{ lang._('IPv6 /64 aggregation threshold') }}</label><input type="number" min="0" max="65536" class="form-control input-sm" id="pbV6Agg" value="4"></div>
+      </div>
       <div class="row" style="margin-top:8px;">
         <div class="col-xs-6"><label style="font-size:11px;">{{ lang._('WAN interface device') }} <small class="text-muted">{{ lang._('(filter-log parsing)') }}</small></label><input type="text" class="form-control input-sm" id="pbWanIf" placeholder="vtnet1"></div>
         <div class="col-xs-6"><label style="font-size:11px;">{{ lang._('Protected ports') }} <small class="text-muted">{{ lang._('(ignore for probes/knocks, e.g. OpenVPN TCP)') }}</small></label><input type="text" class="form-control input-sm" id="pbProtPorts" placeholder="1194, 443"></div>
+      </div>
+      <div class="checkbox" style="margin-top:12px;"><label><input type="checkbox" id="pbSuriPriority"> {{ lang._('Priority bans for Suricata alerts') }}</label></div>
+      <div id="pbSuriPriorityCfg" style="display:none;">
+        <div class="row">
+          <div class="col-xs-6"><label for="pbSuriSeverity" style="font-size:11px;">{{ lang._('Priority severity') }}</label><select class="form-control input-sm" id="pbSuriSeverity"><option value="1">{{ lang._('High (1)') }}</option><option value="2">{{ lang._('High / medium (1-2)') }}</option><option value="3">{{ lang._('All (1-3)') }}</option></select></div>
+          <div class="col-xs-6"><label for="pbSuriMinimum" style="font-size:11px;">{{ lang._('Minimum ban (seconds)') }}</label><input type="number" min="60" max="315360000" class="form-control input-sm" id="pbSuriMinimum" value="1800"></div>
+        </div>
+        <div style="margin-top:8px;"><label for="pbSuriSids" style="font-size:11px;">{{ lang._('Priority signature IDs (optional)') }}</label><input type="text" class="form-control input-sm" id="pbSuriSids" placeholder="1000001, 2000002" title="{{ lang._('Empty matches all signatures at the selected severity.') }}"></div>
       </div>
     </div>
     <div class="pb-sect">
@@ -152,6 +206,7 @@
     </div>
     <div class="pb-sect">
       <div class="h">{{ lang._('Housekeeping') }}</div>
+      <div class="checkbox"><label><input type="checkbox" id="pbHideExpired"> {{ lang._('Automatically hide expired offenders') }}</label></div>
       <div class="row">
         <div class="col-xs-6"><label style="font-size:11px;">{{ lang._('Event retention (days)') }}</label><input type="number" min="0" class="form-control input-sm" id="pbEventRet"></div>
         <div class="col-xs-6"><label style="font-size:11px;">{{ lang._('Offender amnesia (days)') }}</label><input type="number" min="0" class="form-control input-sm" id="pbAmnesia"></div>

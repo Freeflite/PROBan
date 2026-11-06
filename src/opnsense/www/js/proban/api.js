@@ -9,7 +9,10 @@ PROBAN.api = {
         if (typeof params === 'function') { cb = params; params = {}; }
         ajaxGet('/api/proban/overview/offenders', params || {}, cb);
     },
-    events: function (ip, cb) { ajaxGet('/api/proban/overview/events/' + ip, {}, cb); },
+    events: function (ip, params, cb) {
+        if (typeof params === 'function') { cb = params; params = {}; }
+        ajaxGet('/api/proban/overview/events', Object.assign({}, params || {}, {ip: ip}), cb);
+    },
     settingsGet: function (cb) { ajaxGet('/api/proban/settings/get', {}, cb); },
     settingsSet: function (payload, cb) { ajaxCall('/api/proban/settings/set', payload, cb); }
 };

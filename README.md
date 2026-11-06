@@ -18,11 +18,30 @@ Fixed-tier fail2ban-style blocking treats the guy who fat-fingered your SSH once
 
 Each offender has a **ban balance** (seconds):
 
-- **Grows on every hit** — including hits that land *after* they're already blocked (the logged drop rule feeds those back in). Increment per hit `n` is `step × multiplier^(n-1)`, capped at a configurable maximum.
+- **Grows on every hit** — including hits that land *after* they're already blocked (PF address counters feed those back in without logging every dropped packet). Increment per hit `n` is `step × multiplier^(n-1)`, capped at a configurable maximum.
 - **Decays linearly during silence** — a fixed amount per interval (default 30s per 60s). Stay quiet and your sentence bleeds off; keep knocking and it accelerates.
 - **Blocked while balance > 0.**
 
 That's the "parabolic" shape: accelerating up under active attack, linear decay when they give up. A one-off scanner is gone in a minute; a relentless one pins to the max ban and stays there.
+
+### Quiet blocked traffic
+
+ProBAN's drop rules run before CrowdSec and ordinary user filter rules and do not log individual packets. Initial detection still uses logged WAN TCP SYN probes and optional Suricata alerts. Once an address is blocked, the engine reads its incoming block counter from PF and stores one weighted event per address and cycle instead of one database event per packet. Tarpit/honeypot pass traffic continues to use the existing log-based detection; blackhole drops use counters.
+
+The dashboard's **Hits**, **Last seen**, 24-hour total, timeline and per-address history include these batches. For example, 250 more dropped packets add 250 hits and one history row with source `pf`. PF counter collection normally runs every 60 seconds and the dashboard refreshes every 30 seconds; initial log-based detection now has a separate fast path described below. PF does not supply ports, TCP flags or individual packet times here: last-seen and batch timestamps indicate collection time. These counters include all incoming dropped packets from already-banned addresses, not just TCP SYN probes. Protected ports still exclude initial probes and tarpit knocks; they cannot be separated from an address's aggregate drop counter.
+
+IPv6 `/64` counters are shown as separate subnet-total rows rather than attributing unknown packets to individual hosts. Existing history is retained during the database migration. The first snapshot of a pre-existing table is a baseline, not a replay of earlier traffic; subsequent counter changes and resets are tracked. If counters cannot be read, the dashboard warns and existing bans/tables are retained until collection recovers.
+
+After deploying the updated files/package, reload the firewall to enable counters on new and existing ProBAN aliases and install the quiet rules, then run one collection cycle:
+
+```sh
+configctl filter reload
+configctl proban run
+```
+
+Existing database rows and service settings do not need resetting. Native PF behavior still needs verification on the target OPNsense appliance; local automated tests use FreeBSD-format counter fixtures.
+
+When upgrading from the older periodic supervisor, also run `configctl proban restart` after package installation to activate the persistent service. `configctl proban run` remains a bounded, single full cycle; it does not start the service.
 
 ## What happens to a banned IP — three actions, one setting
 
@@ -46,6 +65,32 @@ IPv6 gets the **same treatment as IPv4** — drop, tarpit, honeypot, *and* black
 
 **Evidence-based /64 aggregation.** A v6 attacker usually controls a whole /64 and can rotate source addresses for free, so banning individual /128s is whack-a-mole — but a /64 can also be a *shared* hosting subnet, and blindly banning it would punish innocent neighbours. So ProBAN bans /128s and escalates to the whole /64 only once it has seen **≥ N distinct** offenders in that /64 (configurable; `0` = never). A lone bad tenant on a shared /64 keeps its neighbours; a rotating attacker gets the whole /64 trapped.
 
+The allowlist takes precedence over subnet aggregation. If a proposed `/64` overlaps an allowlisted address or network, ProBAN keeps the individual offending hosts blocked instead of banning that subnet. This applies to fast updates, full reconciliation and blackhole tables. A full reconciliation replaces any existing overbroad entry with the safe host entries while retaining their history. Subnets with no allowlist overlap still aggregate normally.
+
+### IPv6 source rotation (optional)
+
+**IPv6 source-rotation detection** in Settings > Detection sources closes a gap between single-IP thresholds and aggregation: an attacker can rotate IPv6 addresses while keeping each individual address below its grace or scan threshold. The optional detector correlates already-blocked WAN TCP probes across a `/64`, even when the individual SYN/flag/portscan switches are off. It requires **both** a source-diversity threshold and a packet threshold: defaults are **8 distinct sources and 40 probes within 300 seconds**. It is **disabled by default**.
+
+When both thresholds are reached, only the observed, nonallowlisted sources receive a minimum real-time ban (default **600 seconds**, capped by the existing maximum balance). This explicitly bypasses the individual-IP grace threshold, without shortening an existing longer ban or renewing a frozen blackhole. The normal safe IPv6 plan then decides whether to block `/128s` or aggregate to `/64`; the aggregation threshold is visible in both Drop and Tarpit mode, and `0` keeps `/128`-only bans. Any allowlist overlap prevents a subnet ban.
+
+Only blocked inbound WAN TCP SYN, FIN/NULL/XMAS and conflicting SYN-flag probes contribute. IPv4, UDP, ICMPv6, normal ACK/RST/SYN-ACK, allowed traffic, protected ports and allowlisted sources do not contribute. Correlation state is indexed, survives restarts and is pruned at the configured window during maintenance. It is evaluated once per affected prefix per batch. Existing packet hits remain unchanged: correlation decisions appear in history as `ipv6-rotation` events with **0 additional packet hits**, not invented or double-counted traffic. Existing PF states are never deleted.
+
+This is a heuristic, not proof that the sources belong to one attacker. TCP source addresses can be spoofed, and unrelated users can share a `/64`; keep conservative thresholds and use the allowlist or disable aggregation for shared networks. This adds behavioral correlation to ProBAN, not a replacement for OPNsense's connection limits, SYN proxy/syncookies, upstream DDoS protection or Suricata. Local tests cover the detector and its PF planning; native appliance enforcement still requires validation. After deploying updated code, restart the service and save the desired Settings to render the configuration.
+
+## Optional scan detection and priority alerts
+
+Two additional independent switches are disabled by default: **TCP SYN+FIN / SYN+RST** detects SYN combined with FIN or RST (including combinations with additional flags), using the existing packet threshold/window but counting separately from FIN/NULL/XMAS. **Portscan detection (distinct ports)** detects breadth rather than packet volume, with an editable default of **10 distinct destination ports in 60 seconds**, counted separately for each source IP, destination IP and TCP/UDP protocol. It works independently of the individual SYN/UDP/flag switches, while those switches may still trigger their own earlier bans when enabled.
+
+Portscan tracking considers already-blocked WAN TCP SYN, FIN/NULL/XMAS, conflicting SYN flag combinations and UDP probes. Repeats on one port count once; normal ACK, RST, SYN-ACK and allowed traffic do not contribute. The port counts survive engine cycles and restarts, are cleaned during maintenance, and do not duplicate packet hits or history entries. Reasons include the flag combination or the number of distinct ports, target, protocol, window and threshold. Both new detections preserve the allowlist, protected ports, grace and existing ban limits. With portscan detection enabled, UDP bans and quiet counter feedback also work in tarpit mode.
+
+Settings > Detection sources has separate switches for TCP SYN (enabled by default), UDP and TCP FIN/NULL/XMAS (both disabled by default). UDP and TCP-flag probes are counted separately for each source IP. Their default threshold is **5 probes within 60 seconds**; both values are editable. Only already-blocked incoming packets on the configured WAN are considered for the additional scan modes. Protected ports and allowlisted addresses are excluded. Normal ACK, RST and SYN-ACK packets, and allowed UDP traffic, are not classified as these scans.
+
+Enabling UDP detection also installs quiet UDP drop rules for banned sources in tarpit mode, while keeping the TCP redirects unchanged. The threshold is an additional condition, not a bypass of the configured grace period. It limits single-packet false positives but cannot authenticate a source address: UDP and TCP-flag packets can be spoofed. These features classify suspicious traffic, not certain proof of an attacker.
+
+Suricata priority bans are optional and disabled by default. When enabled, matching alerts can bypass the ordinary grace period and impose a minimum real-time ban (default **1800 seconds**) at the selected severity (default **1**, high). Optional signature IDs restrict priority treatment further; an empty ID list matches all signatures at the selected severity. The configured maximum ban still caps the result. Existing blackhole behavior, dry-run, the allowlist and protected ports are preserved; protected ports never receive the new priority escalation. Without a running Suricata producing alerts, this option has no effect and does not enable Suricata itself.
+
+Reasons identify the probe type, destination and WAN, or the Suricata signature, SID, severity and destination. The overview prefers the latest detection reason over later PF counter updates. The original cause is retained while aggregate PF follow-up activity is stored separately in history. PF reasons describe additional incoming packets blocked during an active ban; they cannot identify individual ports, TCP flags or attack types. Existing historical text is not rewritten or reconstructed.
+
 ## Safety — built to be un-weaponizable
 
 - **Reflection-locked** — the redirect target can only be a **private/LAN/VPN** address (RFC1918, loopback, CGNAT, IPv6 ULA). Public targets are rejected at the UI, the API, *and* by the engine. You can never turn it into an outbound reflection cannon aimed at a victim. Remote tarpits are reached over a VPN tunnel (which presents a private tunnel IP).
@@ -58,7 +103,13 @@ Under **Reporting → ProBAN**: live offender count / active blocks / events, a 
 
 The offenders table supports **pagination** (25 / 50 / 100 / custom / ALL rows) and an **IPv4 / IPv6 / Both** filter/switcher. Column sorting is preserved when you change page size or the IPv filter (sorting and pagination are coordinated server-side for the current view). Controls are always visible above the table.
 
-A **Protected ports** setting (comma/space separated) lets you exclude specific ports (e.g. OpenVPN/TCP, other services) from probe and knock counting. This, combined with smarter knock detection (only counts `pass,in` when action=tarpit, destination matches tarpit target IP, and port is in the configured set), keeps legitimate inbound TCP traffic from triggering bans while still escalating on real tarpit hits. UDP VPNs (WireGuard, etc.) are invisible to ProBAN by design. VPN tunnel IPs are protected via the built-in SAFETY ranges + allowlist. See the compatibility section below.
+**Search IP or prefix** filters stored addresses case-insensitively by literal text, including IPv6 subnet rows. Search works with the address-family and expiry filters, sorting and pagination; the dashboard-wide statistics remain independent of the search. If a data refresh fails, the last available values stay visible with a warning instead of being replaced by zeros or an empty table.
+
+Per-address history has previous/next controls with 100 events per page, including IPv6 subnet totals. An open history keeps a stable snapshot while new traffic arrives; **Refresh history** starts again with the latest events. History remains subject to event retention. Time-window statistics, history and retention cleanup use database indexes, installed automatically on the next engine run without discarding existing records. The initial index build can take longer on large databases.
+
+Under **Settings > Housekeeping**, **Automatically hide expired offenders** removes expired IPs from the overview and its offender total on refresh. It is off by default. This is an appearance filter only: hit counters, history and escalation remain intact, and an IP reappears automatically if it is banned again. Turn it off to show expired entries again; the existing retention and amnesia settings still govern actual data cleanup.
+
+A **Protected ports** setting (comma/space separated) lets you exclude specific ports (e.g. OpenVPN/TCP, other services) from probe and knock counting. This, combined with smarter knock detection (only counts `pass,in` when action=tarpit, destination matches tarpit target IP, and port is in the configured set), keeps legitimate inbound TCP traffic from triggering bans while still escalating on real tarpit hits. UDP traffic does not trigger initial firewall-log detection, but dropped UDP packets from an already-banned address contribute to its PF counter. VPN tunnel IPs are protected via the built-in SAFETY ranges + allowlist. See the compatibility section below.
 
 ## Repository layout
 
@@ -151,6 +202,22 @@ IPv6 is fully supported for tarpit/honeypot/blackhole (including pass/in knock d
 Set the WAN interface to your physical untrusted uplink (not a WireGuard interface). VPN tunnel client IPs (private ranges or CGNAT) are protected by the built-in SAFETY ranges + your allowlist. See `proban/config.py:SAFETY`.
 
 The Protected ports field appears in Settings under "Detection sources" (alongside the WAN interface field). The offenders table above the dashboard also has an IPv4/IPv6/Both filter and pagination controls (25/50/100/custom/ALL) that preserve column sorting.
+
+## Efficient PF table updates
+
+Each table synchronization reads the live table once, then sends added and removed addresses in at most two batches through `pfctl -T add/delete -f -`. For example, 1,000 additions and 1,000 removals need three processes instead of 2,001. Unchanged tables need only the read, with no table or counter-snapshot writes. Existing addresses and their packet-counter baselines are retained rather than flushing and rebuilding the table.
+
+Every synchronization command has a 10-second timeout and checks its exit status. A failed command aborts the cycle instead of recording the synchronization as successful. PF operations that have already succeeded are not rolled back; the next cycle reads the live table again and reconciles remaining changes. These paths are regression-tested with mocked PF commands, not a measured appliance performance benchmark.
+
+## Fast detection and load limits
+
+The service keeps one Python process and database connection alive. Native BSD `kqueue` notifications wake it for log and configuration changes, with a one-second fallback check for missed notifications or unsupported platforms. Detection batches run at most once per second; a new ban is added through a non-destructive PF batch without waiting for full maintenance. Protected ports, allowlist and dry-run mode still apply. Ordinary detections retain the configured grace threshold; optional Suricata priority and IPv6 source-rotation decisions can explicitly bypass it. Full counter collection, decay, retention cleanup, IPv6 aggregation and table reconciliation normally run every 60 seconds. `PROBAN_INTERVAL` changes this maintenance interval, not the fast detection cadence. No PF states are killed.
+
+Each source reads at most 1,000 records, 1 MiB, or approximately 250 ms of reading/parsing per batch, whichever limit is reached first. Database writes and PF commands complete separately, so this is not a hard CPU quota or a guaranteed one-second blocking latency under load. Consecutive identical events with the same address, source, reason and timestamp share one weighted database row; distinct timestamps are retained. The next batch resumes at the saved byte cursor, committed with its events. A remaining backlog is reported as `backlog=...B` in the service log.
+
+Incomplete lines wait for their terminating newline. Records over 64 KiB are discarded incrementally, with discarded-record totals in SQLite state (`fw_offset_oversized` and `eve_offset_oversized`). File identity changes and truncation restart reading at the beginning of the current log. Backlogs continue without requiring another file-change notification, but unread data removed by log rotation cannot be recovered. Persistently higher input rates can therefore still exceed the processing and retention capacity.
+
+The service is managed with the existing `configctl proban start|stop|restart|status` actions; `daemon(8)` forwards its output to syslog under `proban`. Local tests exercise native file notifications, bounded processing, simulated PF updates and a real unprivileged daemon's SIGTERM shutdown. FreeBSD service integration and attack-load performance still require verification on the target appliance.
 
 ## Testing
 
