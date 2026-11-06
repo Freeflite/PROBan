@@ -4,7 +4,7 @@
 
 ProBAN watches your firewall (and optionally Suricata) logs, and every time an IP probes your WAN it *grows* that IP's ban. The ban accelerates with each hit and decays during silence — so a drive-by scanner earns a 30-second timeout, while a persistent attacker digs itself into a ban measured in days, then months. Banned IPs can be silently **dropped**, funneled into a **tarpit** that wastes their time and sockets, or redirected to a **honeypot** on ports you choose — all rendered in a live dashboard under **Reporting → ProBAN**.
 
-> **Status: packaged plugin, validated live on OPNsense 26.1.** The progressive engine, dashboard, and drop/tarpit/honeypot enforcement run and enforce on a live OPNsense box, wired up the proper OPNsense way — settings in a **model XML** (`config.xml`, so they're backed up and upgrade-safe), the engine as a **configd/rc.d service**, `config.json` generated from a **template**, and firewall rules owned by a **`plugins.inc.d` hook** (external alias + block / `rdr pass`). Verified end-to-end on OPNsense 26.1 / PHP 8.3: model load, template render, service lifecycle, firewall-rule generation, and the dashboard API. See [Status & Roadmap](#status--roadmap). Contributions and review welcome.
+> **Status: packaged plugin (0.1.3), validated live on OPNsense 26.7** (and earlier on 26.1). The progressive engine, dashboard, and drop/tarpit/honeypot enforcement run and enforce on a live OPNsense box, wired up the proper OPNsense way — settings in a **model XML** (`config.xml`, so they're backed up and upgrade-safe), the engine as a **configd/rc.d service**, `config.json` generated from a **template**, and firewall rules owned by a **`plugins.inc.d` hook** (external alias + block / `rdr pass`). Verified end-to-end on OPNsense 26.7 / PHP 8.3: model load, template render, service lifecycle, firewall-rule generation, PF block enforcement, PF counter-based re-escalation, and the dashboard API. **0.1.3 fixes a service-start failure (`configd` exit status 126) that affected OPNsense 26.7** — see the [changelog](CHANGELOG.md). See [Status & Roadmap](#status--roadmap). Contributions and review welcome.
 
 ![ProBAN settings](docs/images/settings.png)
 
@@ -39,7 +39,7 @@ configctl filter reload
 configctl proban run
 ```
 
-Existing database rows and service settings do not need resetting. Native PF behavior still needs verification on the target OPNsense appliance; local automated tests use FreeBSD-format counter fixtures.
+Existing database rows and service settings do not need resetting. PF counter behavior has been verified on a live OPNsense 26.7 appliance — a blocked source's dropped packets re-escalate it end-to-end — in addition to the FreeBSD-format counter fixtures in the local tests.
 
 When upgrading from the older periodic supervisor, also run `configctl proban restart` after package installation to activate the persistent service. `configctl proban run` remains a bounded, single full cycle; it does not start the service.
 
@@ -189,7 +189,7 @@ Offenders fill the dashboard within a log-cycle. Banned IPs get redirected into 
 
 **VPN and other inbound TCP services compatibility**
 
-ProBAN only acts on TCP SYN packets (see `proban/ingest.py`). UDP-based VPNs (WireGuard, IPsec, OpenVPN/UDP) are invisible to it — no risk of banning tunnel clients or counting handshake attempts.
+By default ProBAN only acts on TCP SYN packets (see `proban/ingest.py`). UDP-based VPNs (WireGuard, IPsec, OpenVPN/UDP) are invisible to it — no risk of banning tunnel clients or counting handshake attempts — *unless* you enable the optional UDP detection (off by default), in which case exclude their ports with **Protected ports**.
 
 For TCP-based VPN servers (e.g. OpenVPN over TCP) or other legitimate inbound TCP services/port-forwards:
 - Use the **Protected ports** field (comma- or space-separated, e.g. `1194, 443`) in Settings → Detection sources. These ports are skipped entirely for probe recording and "tarpit knock" escalation.
@@ -217,7 +217,7 @@ Each source reads at most 1,000 records, 1 MiB, or approximately 250 ms of readi
 
 Incomplete lines wait for their terminating newline. Records over 64 KiB are discarded incrementally, with discarded-record totals in SQLite state (`fw_offset_oversized` and `eve_offset_oversized`). File identity changes and truncation restart reading at the beginning of the current log. Backlogs continue without requiring another file-change notification, but unread data removed by log rotation cannot be recovered. Persistently higher input rates can therefore still exceed the processing and retention capacity.
 
-The service is managed with the existing `configctl proban start|stop|restart|status` actions; `daemon(8)` forwards its output to syslog under `proban`. Local tests exercise native file notifications, bounded processing, simulated PF updates and a real unprivileged daemon's SIGTERM shutdown. FreeBSD service integration and attack-load performance still require verification on the target appliance.
+The service is managed with the existing `configctl proban start|stop|restart|status` actions; `daemon(8)` forwards its output to syslog under `proban`. Local tests exercise native file notifications, bounded processing, simulated PF updates and a real unprivileged daemon's SIGTERM shutdown. FreeBSD service integration — the persistent `daemon(8)`-supervised engine, start/stop/restart/status, and clean SIGTERM shutdown — has been verified on a live OPNsense 26.7 appliance; large-scale attack-load performance has not been benchmarked.
 
 ## Testing
 
@@ -231,18 +231,18 @@ The engine's ban math is pure and its DB-writing paths (`record` / `decay_pass` 
 
 Working today: the progressive engine, dashboard, drop/tarpit/honeypot enforcement, post-max blackhole escalation, reflection-lock, tamper-evidence, health check.
 
-Now wired the proper OPNsense way — **validated live on OPNsense 26.1**:
+Now wired the proper OPNsense way — **validated live on OPNsense 26.7** (and earlier on 26.1):
 
 - [x] Config → **model XML** (typed fields + validation in `config.xml`)
 - [x] Engine → a **configd/rc.d service** instead of a cron line
 - [x] `config.json` generated from a **template** (engine reads it unchanged)
 - [x] Firewall integration owned by a **`plugins.inc.d` hook** (external alias + block / rdr+pass), no stored UUIDs
 - [x] `Makefile` / `pkg-descr` for a real FreeBSD port
-- [x] Validated live on OPNsense 26.1 — model load, template render, service lifecycle, firewall-hook rule generation (block + `rdr pass`), and dashboard API
+- [x] Validated live on OPNsense 26.7 (and earlier 26.1) — model load, template render, service lifecycle, firewall-hook rule generation (block + `rdr pass`), **PF block enforcement, PF counter-based re-escalation**, and dashboard API
 - [x] Tarpit daemon split into its own repo ([TinyPit](https://github.com/Freeflite/TinyPit))
 - [x] Builds & installs as a real `.pkg` (`make package` → `pkg add`; the post-install migrates the model and reloads configd/templates)
-- [x] Automated tests for the engine (25) — ban math, linear + blackhole-accelerated decay, progressive growth, v4/v6 parsing, two-table routing, **IPv6 /64 aggregation + v6 tarpit/blackhole split** (see [Testing](#testing))
-- [x] **IPv6 tarpit parity** — v6 gets the same drop/tarpit/honeypot/blackhole path as v4 (`inet6` `rdr` + `parabolic_block6` / `parabolic_drop6`), with **evidence-based /64 aggregation** (ban /128s, escalate to the /64 only at *N* distinct offenders, so a shared hosting /64 keeps its neighbours). Validated live on OPNsense 26.1 over a ULA honeypot DMZ.
+- [x] Automated tests for the engine — ban math, linear + blackhole-accelerated decay, progressive growth, v4/v6 parsing, two-table routing, **IPv6 /64 aggregation + v6 tarpit/blackhole split**, plus the 0.1.3 detections and PF counter feedback (see [Testing](#testing))
+- [x] **IPv6 tarpit parity** — v6 gets the same drop/tarpit/honeypot/blackhole path as v4 (`inet6` `rdr` + `parabolic_block6` / `parabolic_drop6`), with **evidence-based /64 aggregation** (ban /128s, escalate to the /64 only at *N* distinct offenders, so a shared hosting /64 keeps its neighbours). Validated over a ULA honeypot DMZ on OPNsense 26.1 (the v6 tarpit paths were not re-exercised on 26.7).
 - [x] i18n-ready — every dashboard string wrapped in `lang._()` (JS via a translated lookup with reorderable placeholders); model/menu/ACL auto-extract; flows into `make translate` / Weblate
 - [ ] (someday) federated abuser-intel: mTLS reporting to a central aggregator + shared reputation feed
 
