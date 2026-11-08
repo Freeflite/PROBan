@@ -23,3 +23,14 @@ GEMINI.md
 .claude/
 .cursor/
 .aider*
+
+# ad-hoc notes / conversation dumps -- never commit (README.md and CHANGELOG.md are kept)
+notes.md
+NOTES.md
+notes-*.md
+*.notes.md
+conversation.md
+conversation*.md
+*-conversation.md
+scratch.md
+*.scratch.md
