@@ -12,9 +12,45 @@ MAX_LINE_BYTES = 64 * 1024
 MAX_SECONDS = 0.25
 
 
+def resolve_log(path):
+    """Return the log file to actually open for `path`.
+
+    OPNsense writes its filter log to a dated file (``filter_YYYYMMDD.log``) and
+    only creates the ``latest.log`` symlink from the ``syslog archive`` cron job,
+    which runs hourly. So for up to an hour after boot -- and briefly after a log
+    rotation -- ``/var/log/filter/latest.log`` does not exist even though the filter
+    log is actively being written, and a plain ``open()`` would go blind the whole
+    time (FileNotFoundError, ingest 0). Instead, fall back to the newest
+    ``<subject>_<date>.log`` in the same directory: exactly the file ``latest.log``
+    would point at (what ``scripts/syslog/log_archive`` and the GUI's own
+    ``read_log.py`` resolve to). The dated file and the symlink share an inode, so
+    offset/rotation tracking stays seamless across the transition. Only a missing
+    ``latest.log`` gets this treatment; any other configured path (e.g. Suricata's
+    eve.json) is returned unchanged so its own absence handling still applies."""
+    if os.path.exists(path) or os.path.basename(path) != "latest.log":
+        return path
+    directory = os.path.dirname(path)
+    subject = os.path.basename(directory)
+    if not subject:
+        return path
+    prefix = subject + "_"
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return path
+    newest = None
+    for name in names:
+        if not (name.startswith(prefix) and name.endswith(".log")):
+            continue
+        stamp = name[len(prefix):-4].split(".", 1)[0]   # YYYYMMDD, before any rotate .SEQ
+        if len(stamp) == 8 and stamp.isdigit() and (newest is None or name > newest):
+            newest = name                               # lexical max == newest date, live file over rotated .SEQ
+    return os.path.join(directory, newest) if newest else path
+
+
 def read_lines(connection, path, key):
     try:
-        handle = open(path, "rb")
+        handle = open(resolve_log(path), "rb")
     except FileNotFoundError:
         for suffix in ("_pending", "_backlog"):
             if store.gs(connection, key + suffix) not in ("", "0"):

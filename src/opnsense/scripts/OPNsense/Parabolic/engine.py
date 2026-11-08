@@ -122,8 +122,11 @@ class Runtime:
                 sources.append((cfg.fwlog, "fw_offset"))
             if cfg.sources.get("suricata", True) and cfg.eve:
                 sources.append((cfg.eve, "eve_offset"))
-        self.paths = [os.path.join(BASE, "config.json")] + [path for path, key in sources if path]
-        signature = tuple(file_signature(path) for path, key in sources)
+        # Watch the file the reader will actually open: when latest.log is missing,
+        # that's the newest dated log, not the not-yet-created symlink (see ingest.resolve_log).
+        watched = [ingest.resolve_log(path) for path, key in sources if path]
+        self.paths = [os.path.join(BASE, "config.json")] + watched
+        signature = tuple(file_signature(ingest.resolve_log(path)) for path, key in sources)
         maintenance = self.settings != cfg.raw or clock >= self.next_maintenance
         if not maintenance and not self.backlog and signature == self.signature:
             return False

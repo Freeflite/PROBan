@@ -1821,5 +1821,47 @@ class V6Routing(unittest.TestCase):
         self.assertNotIn("2001:db8:e::1", dropped)                 # not split into a drop set
 
 
+class LogResolution(unittest.TestCase):
+    """ingest.resolve_log: survive the window where OPNsense's hourly `syslog archive`
+    cron has not yet (re)created /var/log/<subject>/latest.log by reading the newest
+    dated file directly, the same target log_archive/read_log.py resolve to."""
+
+    def _filterdir(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        directory = os.path.join(root, "filter")
+        os.makedirs(directory)
+        return directory
+
+    def test_missing_latest_falls_back_to_newest_dated_file(self):
+        directory = self._filterdir()
+        for name in ("filter_20261107.log", "filter_20261108.0001.log", "filter_20261108.log"):
+            open(os.path.join(directory, name), "w").close()
+        resolved = ingest.resolve_log(os.path.join(directory, "latest.log"))
+        self.assertEqual(os.path.basename(resolved), "filter_20261108.log")   # newest date, live file over rotated .SEQ
+
+    def test_existing_latest_is_used_unchanged(self):
+        directory = self._filterdir()
+        open(os.path.join(directory, "filter_20261108.log"), "w").close()
+        latest = os.path.join(directory, "latest.log")
+        open(latest, "w").close()                                             # stand in for the symlink
+        self.assertEqual(ingest.resolve_log(latest), latest)
+
+    def test_non_latest_paths_are_returned_unchanged_even_when_missing(self):
+        missing_eve = os.path.join(self._filterdir(), "..", "suricata", "eve.json")
+        self.assertEqual(ingest.resolve_log(missing_eve), missing_eve)
+
+    def test_no_dated_files_returns_the_original_path(self):
+        latest = os.path.join(self._filterdir(), "latest.log")
+        self.assertEqual(ingest.resolve_log(latest), latest)
+
+    def test_unrelated_filenames_are_ignored(self):
+        directory = self._filterdir()
+        for name in ("filter_2026.log", "notfilter_20261108.log", "filter_20261108.txt"):
+            open(os.path.join(directory, name), "w").close()
+        latest = os.path.join(directory, "latest.log")
+        self.assertEqual(ingest.resolve_log(latest), latest)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

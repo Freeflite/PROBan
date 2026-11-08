@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.4 (2026-11-08)
+
+### Fixed
+- **Engine went blind (`ingested fw=0`) after boot and after log rotation.** The
+  default firewall-log path, `/var/log/filter/latest.log`, is a symlink OPNsense
+  only (re)creates from its hourly `syslog archive` cron job — so for up to an hour
+  after a reboot, and briefly after each rotation, it does not exist even though the
+  filter log is actively being written. The engine's plain `open()` hit
+  `FileNotFoundError` and ingested nothing the whole time: no detections, no bans,
+  no escalation. It now falls back to the newest `filter_*.log` in the same
+  directory (the exact file `latest.log` would point at, matching OPNsense's own
+  `log_archive` and firewall-log viewer). The dated file and the symlink share an
+  inode, so offset/rotation tracking stays seamless when the symlink later appears —
+  no missed bytes, no double-counting. Reproduced and fixed on a live OPNsense 26.7
+  box: a freshly rebooted box with no `latest.log` now detects and escalates attack
+  traffic immediately, with no manual intervention. (#7; also the root cause behind
+  the "only updates when I change a setting" reports in #4 and #8.)
+
 ## 0.1.3 (2026-11-06)
 
 The bulk of this release comes from **[brotaxt](https://github.com/brotaxt)**
