@@ -227,6 +227,24 @@ python -m unittest discover -s tests
 
 The engine's ban math is pure and its DB-writing paths (`record` / `decay_pass` / `enforce`) take the timestamp as a parameter, so the suite is deterministic and needs no OPNsense or pf. It covers the progressive growth curve (grace + `step × mult^(n-1)` + max cap), linear vs. blackhole-accelerated decay, the private-target reflection lock, the two-table (`parabolic_block` / `parabolic_drop`) routing, protected ports + smarter (target/port-aware) knock detection, v4/v6 ingest, and the IPv6 /64 aggregation (shared-subnet safety + rotation capture) plus the v6 tarpit/blackhole split. Pagination and IPv filtering are exercised via the API + JS layers.
 
+### Manual dashboard validation
+
+For hands-on UI checks that want a populated store — offenders-list pagination, the page-size picker (including the 500-row cap and the "max 500" custom entry), column sorting across thousands of rows, the "Active blocks" stat, and the per-offender hits modal — `tools/seed_offenders.py` sprays synthetic offenders into a store:
+
+```sh
+# 5,000 offenders into the live store on the firewall:
+python3 tools/seed_offenders.py --count 5000
+
+# ...also seed event detail for the first 25 (so the hits modal shows data;
+#    the rest have none, which exercises the "event history aged out" path):
+python3 tools/seed_offenders.py --count 5000 --with-events 25
+
+# remove everything the tool added and exit:
+python3 tools/seed_offenders.py --purge
+```
+
+It's a dev helper (not shipped in the plugin — the Makefile packages `src/` only), reuses the engine's `proban.store` schema, and confines every row to the non-routable RFC 2544 block (`198.18.0.0/15`) so the synthetic data is obvious and one `--purge` removes it cleanly. See the script's `--help` for `--net`, `--active-frac`, `--seed`, and `--no-clear`.
+
 ## Status & Roadmap
 
 Working today: the progressive engine, dashboard, drop/tarpit/honeypot enforcement, post-max blackhole escalation, reflection-lock, tamper-evidence, health check.
