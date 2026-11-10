@@ -2,15 +2,41 @@
 window.PROBAN = window.PROBAN || {};
 PROBAN.fmt = (function () {
     var COLORS = PROBAN.COLORS || ['#8bc34a', '#ffc107', '#ff9800', '#f4511e', '#c62828'];
+    // Time rendering mode. 'browser' uses the viewer's local zone (default);
+    // 'firewall' pins every timestamp to the firewall's own zone (TZ, an IANA name)
+    // so what the dashboard shows matches the firewall's logs/clock regardless of
+    // where the browser is. All timestamps are epoch, so only the display zone changes.
+    var TMODE = 'browser', TZ = null;
+    // merge the firewall timeZone into a toLocale* options object when in firewall mode
+    function zopts(base) {
+        if (TMODE === 'firewall' && TZ) {
+            var o = {}; for (var k in (base || {})) { o[k] = base[k]; } o.timeZone = TZ; return o;
+        }
+        // Never hand null to toLocale*(): toLocaleString([], null) throws (ToObject(null)),
+        // which is how ftime (base=null) blew up the offenders render. undefined == defaults.
+        return base == null ? undefined : base;
+    }
     return {
         // tier (1..5) -> colour
         tcolor: function (t) { return COLORS[Math.min((t || 1) - 1, 4)] || '#999'; },
         // epoch seconds -> locale date/time
-        ftime: function (ts) { return new Date(ts * 1000).toLocaleString(); },
+        ftime: function (ts) { return new Date(ts * 1000).toLocaleString([], zopts(null)); },
         // epoch ms -> short "Jul 4, 09:15" label
-        fmtLbl: function (ms) { return new Date(ms).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'}); },
+        fmtLbl: function (ms) { return new Date(ms).toLocaleString([], zopts({month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'})); },
         // epoch ms -> "09:15" axis tick
-        fmtTick: function (ms) { return new Date(ms).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}); },
+        fmtTick: function (ms) { return new Date(ms).toLocaleTimeString([], zopts({hour: '2-digit', minute: '2-digit'})); },
+        // switch time rendering. tz is an IANA name (e.g. "America/Chicago"); validated
+        // once here so a bad/unknown zone silently falls back to browser-local instead of
+        // throwing RangeError out of every formatter.
+        setTimeMode: function (mode, tz) {
+            if (mode === 'firewall' && tz) {
+                try { new Date().toLocaleString([], {timeZone: tz}); TMODE = 'firewall'; TZ = tz; return; }
+                catch (e) { /* unknown zone -> fall through to browser */ }
+            }
+            TMODE = 'browser'; TZ = null;
+        },
+        timeMode: function () { return TMODE; },
+        timeZone: function () { return TZ; },
         // seconds -> "1y 2d 6h" (drops trailing units once a coarser one is present)
         fmtDur: function (s) {
             s = Math.round(+s); if (s <= 0) return '-';

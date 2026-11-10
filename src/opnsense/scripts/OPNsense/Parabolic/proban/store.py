@@ -98,6 +98,8 @@ def activate_rotation(cfg, connection, prefix, timestamp, pending=None):
     minimum_ban = min(cfg.maxban, cfg.v6_rotation_secs * cfg.damt / cfg.dint)
     for ip, probes, balance, last_calc, blackhole_until, reasons in participants:
         blackhole_until = blackhole_until or 0
+        if last_calc is None:        # malformed/legacy row -> treat this pass as its first calc
+            last_calc = timestamp
         calculated_at = max(timestamp, last_calc)
         if cfg.blackhole_on and blackhole_until > calculated_at:
             continue
@@ -186,13 +188,18 @@ def decay_pass(cfg, c, now):
     c.execute("DELETE FROM scan_ports WHERE last_seen<=?", (now - cfg.portscan_window,))
     c.execute("DELETE FROM v6_rotation WHERE ts<=?", (now - cfg.v6_rotation_window,))
     for ip, ban, lc, bh in c.execute("SELECT ip,ban_secs,last_calc,blackhole_until FROM offenders WHERE ban_secs>0").fetchall():
-        bh = bh or 0
-        nb = rules.decay_ban(cfg, ban, lc, now, bh)
-        if cfg.blackhole_on and bh == 0 and ban >= cfg.maxban:
-            nbh = now + int(cfg.bhhours * 3600)   # just maxed out -> into the hole
-        elif cfg.blackhole_on and bh > 0 and now >= bh:
-            nbh = 0                                # served the hole -> back to the tarpit
-        else:
-            nbh = bh
-        c.execute("UPDATE offenders SET ban_secs=?,last_calc=?,blocked_until=?,level=?,blackhole_until=? WHERE ip=?",
-                  (nb, now, rules.wall_until(cfg, now, nb), rules.level_of(nb), nbh, ip))
+        # Per-row guard: one bad/malformed offender row must not abort the whole decay
+        # pass (which would stall decay + enforcement for every offender).
+        try:
+            bh = bh or 0
+            nb = rules.decay_ban(cfg, ban, lc, now, bh)
+            if cfg.blackhole_on and bh == 0 and ban >= cfg.maxban:
+                nbh = now + int(cfg.bhhours * 3600)   # just maxed out -> into the hole
+            elif cfg.blackhole_on and bh > 0 and now >= bh:
+                nbh = 0                                # served the hole -> back to the tarpit
+            else:
+                nbh = bh
+            c.execute("UPDATE offenders SET ban_secs=?,last_calc=?,blocked_until=?,level=?,blackhole_until=? WHERE ip=?",
+                      (nb, now, rules.wall_until(cfg, now, nb), rules.level_of(nb), nbh, ip))
+        except Exception as error:
+            print(f"decay skipped for {ip}: {error}", flush=True)

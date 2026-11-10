@@ -48,6 +48,10 @@ class OverviewController extends \OPNsense\Base\ApiControllerBase
             $tamper = (string)@$db->querySingle("SELECT v FROM state WHERE k='tamper'");
             $counterError = (string)$db->querySingle("SELECT v FROM state WHERE k='counter_error'");
             $eventHits = $this->eventHits($db);
+            // Display metadata for the dashboard: the firewall's own time zone (so it can
+            // optionally pin all timestamps to firewall time), the chosen time source, and
+            // the event-retention window (so the empty hits modal can explain pruned history).
+            $g = new General();
             $out = [
                 "total" => (int)$db->querySingle("SELECT COUNT(*) FROM offenders" . $this->offendersWhere()),
                 "active" => (int)$db->querySingle("SELECT COUNT(*) FROM offenders WHERE ban_secs>0"),
@@ -55,7 +59,10 @@ class OverviewController extends \OPNsense\Base\ApiControllerBase
                 "mode" => $mode,
                 "levels" => $levels,
                 "tamper" => $tamper,
-                "counter_error" => $counterError
+                "counter_error" => $counterError,
+                "tz" => @date_default_timezone_get() ?: "UTC",
+                "time_source" => ((string)$g->time_source === "firewall") ? "firewall" : "browser",
+                "retention_days" => (int)((string)$g->event_retention_days)
             ];
             $db->close();
             return $out;
@@ -84,7 +91,11 @@ class OverviewController extends \OPNsense\Base\ApiControllerBase
             if ($search !== '') $count->bindValue(':search', $search, SQLITE3_TEXT);
             $total = (int)$count->execute()->fetchArray(SQLITE3_NUM)[0];
 
-            if ($limit <= 0 || $limit > 10000) $limit = 10000;
+            // Hard page cap: never return more than 500 offenders in a single request.
+            // A larger pull (the old 10000 ceiling) pins PHP/SQLite and the browser when the
+            // offenders table is large (tens of thousands of rows). limit<=0 means "unset" -> default page.
+            if ($limit <= 0) $limit = 25;
+            if ($limit > 500) $limit = 500;
             if ($offset < 0) $offset = 0;
 
             $sql = "SELECT ip,hits,last_seen,ban_secs,level,blocked_until,reasons FROM offenders" . $where . " ORDER BY $sort $order LIMIT $limit OFFSET $offset";

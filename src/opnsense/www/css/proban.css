@@ -12,3 +12,7 @@
 #pbHdr .t{font-size:16px;font-weight:600;color:#555;}
 .pb-sect{border:1px solid #eee;border-radius:4px;padding:12px;margin-bottom:12px;}
 .pb-sect > .h{font-weight:700;margin-bottom:8px;color:#555;text-transform:uppercase;font-size:11px;letter-spacing:1px;}
+/* The theme pins select.input-sm to height:31px AND line-height:31px; with border-box
+   and the .input-sm padding that leaves a ~19px content box, so the 31px text line is
+   clipped top/bottom (worst at the bottom). Let the settings dropdowns size to content. */
+.pb-sect select.form-control.input-sm{height:auto;line-height:1.5;}

@@ -1,7 +1,7 @@
 <model>
     <mount>//OPNsense/proban/general</mount>
     <description>ProBAN progressive-ban settings</description>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
     <items>
         <enabled type="BooleanField">
             <Default>1</Default>
@@ -164,6 +164,12 @@
             <Default>0</Default>
             <Required>Y</Required>
         </hide_expired>
+        <time_source type="TextField">
+            <Default>browser</Default>
+            <Required>Y</Required>
+            <Mask>/^(browser|firewall)$/</Mask>
+            <ValidationMessage>Dashboard times: browser (viewer's local zone) or firewall (the firewall's own zone).</ValidationMessage>
+        </time_source>
         <src_firewall type="BooleanField">
             <Default>1</Default>
             <Required>Y</Required>

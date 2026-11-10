@@ -58,18 +58,19 @@
         <button type="button" class="btn btn-default" data-s="0">{{ lang._('Both') }}</button>
       </div>
     </span>
-    <span>
+    <span style="white-space:nowrap;">
       <small class="text-muted">{{ lang._('Per page') }}</small>
       <div class="btn-group btn-group-xs" id="pbPageSize" style="vertical-align:middle;">
         <button type="button" class="btn btn-default" data-s="25">25</button>
         <button type="button" class="btn btn-default" data-s="50">50</button>
         <button type="button" class="btn btn-default" data-s="100">100</button>
         <button type="button" class="btn btn-default" data-v="custom">{{ lang._('Custom') }}</button>
-        <button type="button" class="btn btn-default" data-v="all">{{ lang._('All') }}</button>
       </div>
-      <input type="number" id="pbPageSizeCustom" class="input-sm" style="width:52px; display:none; vertical-align:middle; height:22px; padding:1px 5px;" value="25" min="1" max="10000">
+      <input type="number" id="pbPageSizeCustom" class="input-sm" style="width:52px; display:none; vertical-align:middle; height:22px; padding:1px 5px; margin-left:6px;" value="25" min="1" max="500">
+      <small id="pbPageSizeMax" class="text-muted" style="display:none; vertical-align:middle; margin-left:4px;">{{ lang._('max 500') }}</small>
     </span>
-    <span id="pbOffendersInfo" style="margin-left:auto; color:#666;"></span>
+    <span id="pbTzLabel" class="text-muted" style="margin-left:auto; font-size:11px;"></span>
+    <span id="pbOffendersInfo" style="margin-left:12px; color:#666;"></span>
     <div class="btn-group btn-group-xs" id="pbPager" style="vertical-align:middle;">
       <button type="button" class="btn btn-default" id="pbPrev" title="{{ lang._('previous') }}"><i class="fa fa-chevron-left"></i></button>
       <button type="button" class="btn btn-default" id="pbNext" title="{{ lang._('next') }}"><i class="fa fa-chevron-right"></i></button>
@@ -77,7 +78,7 @@
   </div>
   <div class="table-responsive">
   <table class="table table-striped table-condensed" id="pbTbl" style="margin-top:8px;">
-    <thead><tr><th class="pbsort" data-k="ip">{{ lang._('Source IP') }} <span class="pbcar"></span></th><th class="pbsort" data-k="hits">{{ lang._('Hits') }} <span class="pbcar"></span></th><th class="pbsort" data-k="last_seen">{{ lang._('Last seen') }} <span class="pbcar"></span></th><th class="pbsort" data-k="ban_secs">{{ lang._('Ban') }} <span class="pbcar"></span></th><th class="pbsort" data-k="level">{{ lang._('Level') }} <span class="pbcar"></span></th><th class="pbsort" data-k="blocked_until">{{ lang._('Blocked until') }} <span class="pbcar"></span></th><th>{{ lang._('Latest reason') }}</th></tr></thead>
+    <thead><tr><th class="pbsort" data-k="ip">{{ lang._('Source IP') }} <span class="pbcar"></span></th><th class="pbsort" data-k="hits">{{ lang._('Hits') }} <span class="pbcar"></span></th><th class="pbsort" data-k="last_seen">{{ lang._('Last seen') }} <span class="pbcar"></span></th><th class="pbsort" data-k="ban_secs">{{ lang._('Ban') }} <span class="pbcar"></span></th><th class="pbsort" data-k="level">{{ lang._('Level') }} <span class="pbcar"></span></th><th class="pbsort" data-k="blocked_until">{{ lang._('Blocked until') }} <i class="fa fa-question-circle text-muted" style="cursor:help;" title="{{ lang._('Wall-clock expiry after ban decay. The Ban column is the live budget; it bleeds off over time, so a block outlasts it — at the default decay rate (half real-time) a block lasts about 2x the Ban value. Tune the decay rate under Settings → Decay on silence.') }}"></i> <span class="pbcar"></span></th><th>{{ lang._('Latest reason') }}</th></tr></thead>
     <tbody></tbody>
   </table>
   </div>
@@ -211,6 +212,10 @@
         <div class="col-xs-6"><label style="font-size:11px;">{{ lang._('Event retention (days)') }}</label><input type="number" min="0" class="form-control input-sm" id="pbEventRet"></div>
         <div class="col-xs-6"><label style="font-size:11px;">{{ lang._('Offender amnesia (days)') }}</label><input type="number" min="0" class="form-control input-sm" id="pbAmnesia"></div>
       </div>
+      <div class="row" style="margin-top:8px;">
+        <div class="col-xs-6"><label for="pbTimeSource" style="font-size:11px;">{{ lang._('Show times in') }}</label><select class="form-control input-sm" id="pbTimeSource"><option value="browser">{{ lang._('Browser time (this device)') }}</option><option value="firewall">{{ lang._('Firewall time') }}</option></select></div>
+        <div class="col-xs-6"><small class="text-muted" style="display:block;margin-top:18px;">{{ lang._('Which clock every timestamp on the dashboard is shown in.') }}</small></div>
+      </div>
     </div>
   </div>
   <div class="modal-footer">
@@ -235,7 +240,11 @@ PROBAN.T = {
   notPrivate: "{{ lang._('Target must be a private/LAN IP — public IPs are blocked (reflection prevention). Remote tarpit = via VPN tunnel.') }}",
   maxBanMin: "{{ lang._('Max ban must be at least 60s (e.g. 30d, 1y 2d).') }}",
   decayNote: "{{ lang._('= bleeds %RATE%x real-time; a max ban clears after %DUR% of silence.') }}",
-  bhNote: "{{ lang._('Maxed offenders sit dropped for %H%h, bleeding %AMT% off the ban each hour (%TOTAL% total), then back to the tarpit.') }}"
+  bhNote: "{{ lang._('Maxed offenders sit dropped for %H%h, bleeding %AMT% off the ban each hour (%TOTAL% total), then back to the tarpit.') }}",
+  noHistoryRet: "{{ lang._('No per-hit history retained for this source — event detail is pruned after %D% days (Event retention). The lifetime hit count and ban are kept longer (Offender amnesia).') }}",
+  tzLabel: "{{ lang._('times: %S%') }}",
+  tzBrowser: "{{ lang._('this device') }}",
+  tzFirewall: "{{ lang._('firewall') }}"
 };
 </script>
 <script src="{{ cache_safe('/ui/js/proban/format.js') }}"></script>

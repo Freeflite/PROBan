@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.1.5 (2026-11-09)
+
+Dashboard UX pass from field reports on large offender tables (#8, #9, #10), plus an
+engine-resilience hardening.
+
+### Fixed
+- **"View all" / large page sizes could pin the browser and the API** on firewalls
+  with tens of thousands of offenders. The offenders list is now hard-capped at 500
+  rows per request (the old ceiling was 10,000, and the "All" page-size button has
+  been removed); paging through the full table is unaffected. A previously-saved
+  "All" preference migrates to the default page size. (#8)
+- **The per-offender hits modal showed a silent blank table** for any source whose
+  events had aged out. An offender row (hit count + ban) is kept for
+  `offender_amnesia_days`, but the per-hit `events` prune after
+  `event_retention_days` — so a source last active beyond the retention window keeps
+  its lifetime hit count but has no event detail left to show. The modal now explains
+  this instead of rendering an empty table. (#10)
+- **A single malformed offender row could stall the whole engine.** The decay pass does
+  per-row ban math (`now - last_calc`); a row with a NULL `last_calc` (e.g. a manual DB
+  edit or a partial import) raised `int - NoneType` and aborted the *entire* cycle on
+  every pass — no decay and no enforcement, for any offender, until it was removed. The
+  decay math now tolerates a NULL `last_calc`/`blackhole_until` (the row keeps its balance
+  for that pass and the next write repopulates `last_calc`), and each row is processed
+  independently so one bad row is logged and skipped instead of halting the pass.
+
+### Added
+- **Time-source setting (Settings → Housekeeping → "Show times in").** Choose whether
+  the dashboard renders every timestamp in **browser time** (the viewer's local zone,
+  the default and prior behavior) or **firewall time** (the firewall's own zone, so
+  what you see matches the firewall's logs and clock from anywhere). A small indicator
+  above the offenders table shows which clock is in effect. All timestamps on the page
+  honor the choice consistently. (#9)
+- **"Blocked until" column hint** explaining it is the wall-clock expiry *after* ban
+  decay — at the default decay rate (half real-time) a block outlasts its current
+  "Ban" value by ~2× — and that the decay rate is tunable under Settings. (#10)
+
 ## 0.1.4 (2026-11-08)
 
 ### Fixed

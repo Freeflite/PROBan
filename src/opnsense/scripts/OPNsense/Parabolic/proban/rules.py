@@ -26,6 +26,13 @@ def decay_ban(cfg, ban, last_calc, t, bh_until):
     # accelerated blackhole rate; the rest at the normal silence-decay rate.
     if ban <= 0:
         return 0.0
+    # Tolerate malformed/legacy rows: a NULL last_calc gives no basis to decay from, so
+    # keep the balance this pass (the caller rewrites last_calc=t) instead of crashing on
+    # (t - None); a NULL blackhole_until is simply "not blackholed".
+    if last_calc is None:
+        return ban
+    if bh_until is None:
+        bh_until = 0
     dt = t - last_calc
     if dt <= 0:
         return ban

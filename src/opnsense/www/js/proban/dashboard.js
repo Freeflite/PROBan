@@ -6,10 +6,12 @@ PROBAN.dashboard = (function () {
     var tlBucket = 300, tlWindow = 10800, tlEnd = 0;   // timeline: resolution / span / right edge (0 = live)
     var pbRows = [], pbSort = {k: 'ban_secs', dir: -1};
     var pbPageSize = 25;
+    var PB_MAX_PAGE = 500;   // hard cap: never request or render more than this many offenders at once
     var pbPage = 0;
     var pbFamily = 0; // 0=both, 4=IPv4, 6=IPv6
     var pbTotal = 0;
     var pbSearch = '';
+    var pbRetentionDays = 14;   // event-retention window, from stats; used by the empty hits modal
     var pbOffendersRequest = 0;
     var refreshErrors = {stats: false, offenders: false};
     var pbHistoryIP = '', pbHistoryOffset = 0, pbHistoryTotal = 0, pbHistoryThrough = 0;
@@ -19,12 +21,9 @@ PROBAN.dashboard = (function () {
         try {
             var ps = localStorage.getItem('proban_offenders_pageSize');
             if (ps !== null) {
-                if (ps === 'all') {
-                    pbPageSize = 'all';
-                } else {
-                    var n = parseInt(ps, 10);
-                    if (!isNaN(n) && n > 0) pbPageSize = n;
-                }
+                // migrates a previously-persisted 'all' (parseInt -> NaN) back to the default page size
+                var n = parseInt(ps, 10);
+                if (!isNaN(n) && n > 0) pbPageSize = Math.min(n, PB_MAX_PAGE);
             }
             var fam = localStorage.getItem('proban_offenders_family');
             if (fam !== null) {
@@ -70,7 +69,6 @@ PROBAN.dashboard = (function () {
     }
     // which page-size button reflects the current pbPageSize
     function pageSizeKey() {
-        if (pbPageSize === 'all') return 'all';
         if ([25, 50, 100].indexOf(pbPageSize) !== -1) return pbPageSize;
         return 'custom';
     }
@@ -116,22 +114,32 @@ PROBAN.dashboard = (function () {
             info.text('0 total');
             return;
         }
-        if (pbPageSize === 'all' || pbPageSize <= 0) {
-            info.text('1-' + pbTotal + ' of ' + pbTotal);
-        } else {
-            var start = pbPage * pbPageSize + 1;
-            var end = Math.min((pbPage + 1) * pbPageSize, pbTotal);
-            info.text(start + '-' + end + ' of ' + pbTotal);
-        }
+        var start = pbPage * pbPageSize + 1;
+        var end = Math.min((pbPage + 1) * pbPageSize, pbTotal);
+        info.text(start + '-' + end + ' of ' + pbTotal);
     }
     function refreshStatus(source, failed) {
         refreshErrors[source] = failed;
         $('#pbRefreshError').toggle(refreshErrors.stats || refreshErrors.offenders);
     }
+    // reflect which clock the dashboard is showing times in (firewall zone vs this device)
+    function updateTzLabel() {
+        var el = $('#pbTzLabel'); if (!el.length || !T.tzLabel) return;
+        var which = (fmt.timeMode && fmt.timeMode() === 'firewall')
+            ? ((T.tzFirewall || 'firewall') + (fmt.timeZone() ? ' · ' + fmt.timeZone() : ''))
+            : (T.tzBrowser || 'this device');
+        el.text(T.tzLabel.replace('%S%', which));
+    }
     function load() {
         api.stats(function (d) {
             refreshStatus('stats', !d || !!d.skip);
             if (!d || d.skip) return;
+            // apply display metadata before anything renders timestamps this cycle
+            var prevMode = fmt.timeMode ? fmt.timeMode() : 'browser';
+            if (fmt.setTimeMode) fmt.setTimeMode(d.time_source, d.tz);
+            if (d.retention_days != null) pbRetentionDays = d.retention_days;
+            updateTzLabel();
+            if (fmt.timeMode && fmt.timeMode() !== prevMode) { if (pbRows.length) renderOffenders(); loadTimeline(); }
             $('#pb-total').text(d.total || 0); $('#pb-active').text(d.active || 0); $('#pb-events').text(d.events24h || 0);
             $('#pb-mode').text(d.mode || '-').css('color', d.mode === 'enforcing' ? '#c62828' : (d.mode === 'disabled' ? '#999' : '#ff9800'));
             if (d.tamper) { $('#pbTamperIp').text(d.tamper); $('#pbTamper').show(); } else { $('#pbTamper').hide(); }
@@ -151,8 +159,8 @@ PROBAN.dashboard = (function () {
 
     function loadOffenders() {
         var request = ++pbOffendersRequest;
-        var limit = (pbPageSize === 'all' || pbPageSize <= 0) ? 0 : pbPageSize;
-        var offset = (pbPageSize === 'all' || pbPageSize <= 0) ? 0 : pbPage * pbPageSize;
+        var limit = pbPageSize;
+        var offset = pbPage * pbPageSize;
         var params = {
             limit: limit,
             offset: offset,
@@ -167,7 +175,7 @@ PROBAN.dashboard = (function () {
             if (!d || d.skip) return;
             pbRows = (d && d.rows) || [];
             pbTotal = (d && d.total) || 0;
-            if (pbPageSize !== 'all' && pbPageSize > 0) {
+            if (pbPageSize > 0) {
                 var maxPage = Math.max(0, Math.ceil(pbTotal / pbPageSize) - 1);
                 if (pbPage > maxPage) {
                     pbPage = maxPage;
@@ -213,6 +221,13 @@ PROBAN.dashboard = (function () {
             pbHistoryOffset = offset;
             var rows = d.rows || [];
             $('#pbModalBody').empty();
+            if (!rows.length) {
+                // An offender can outlive its event detail: the offender row (hit count + ban)
+                // is kept for offender_amnesia_days, but per-hit events prune after
+                // event_retention_days. Explain the blank instead of showing an empty table.
+                var msg = (T.noHistoryRet || '').replace('%D%', pbRetentionDays);
+                $('#pbModalBody').append('<tr><td colspan="4" class="text-muted" style="padding:18px 12px;text-align:center;line-height:1.5;">' + msg + '</td></tr>');
+            }
             $.each(rows, function (i, e) { $('#pbModalBody').append('<tr><td>' + fmt.ftime(e.ts) + '</td><td>' + $('<div>').text(e.source).html() + '</td><td>' + (e.hits || 1) + '</td><td>' + $('<div>').text(e.reason).html() + '</td></tr>'); });
             $('#pbHistoryInfo').text(pbHistoryTotal ? (offset + 1) + '-' + Math.min(offset + rows.length, pbHistoryTotal) + ' of ' + pbHistoryTotal : '0 total');
             $('#pbModal .modal-body').scrollTop(0);
@@ -264,15 +279,15 @@ PROBAN.dashboard = (function () {
         $('#pbPageSize').on('click', 'button', function () {
             var dv = $(this).attr('data-v');
             if (dv === 'custom') {
-                $('#pbPageSizeCustom').show().focus();
-                pbPageSize = parseInt($('#pbPageSizeCustom').val(), 10) || 25;
+                // force inline-block: jQuery .show() resolves <input> to display:block under
+                // OPNsense's form CSS, which drops it onto its own line beside the buttons.
+                $('#pbPageSizeCustom').css('display', 'inline-block').focus();
+                $('#pbPageSizeMax').css('display', 'inline-block');
+                pbPageSize = Math.min(parseInt($('#pbPageSizeCustom').val(), 10) || 25, PB_MAX_PAGE);
                 setActiveVal('pbPageSize', 'custom');
-            } else if (dv === 'all') {
-                $('#pbPageSizeCustom').hide();
-                pbPageSize = 'all';
-                setActiveVal('pbPageSize', 'all');
             } else {
-                $('#pbPageSizeCustom').hide();
+                $('#pbPageSizeCustom').css('display', 'none');
+                $('#pbPageSizeMax').css('display', 'none');
                 pbPageSize = parseInt($(this).attr('data-s'), 10) || 25;
                 setActiveVal('pbPageSize', pbPageSize);
             }
@@ -283,6 +298,7 @@ PROBAN.dashboard = (function () {
         var debouncedCustom = debounce(function () {
             var v = parseInt($(this).val(), 10) || 25;
             if (v < 1) v = 1;
+            if (v > PB_MAX_PAGE) v = PB_MAX_PAGE;
             pbPageSize = v;
             pbPage = 0;
             savePersisted();
@@ -297,7 +313,7 @@ PROBAN.dashboard = (function () {
             }
         });
         $('#pbNext').on('click', function () {
-            var ps = (pbPageSize === 'all' || pbPageSize <= 0) ? pbTotal : pbPageSize;
+            var ps = pbPageSize > 0 ? pbPageSize : 25;
             var maxPage = ps > 0 ? Math.ceil(pbTotal / ps) - 1 : 0;
             if (pbPage < maxPage) {
                 pbPage++;
@@ -309,9 +325,11 @@ PROBAN.dashboard = (function () {
         setActiveVal('pbFamily', pbFamily);
         setActiveVal('pbPageSize', pageSizeKey());
         if (pageSizeKey() === 'custom') {
-            $('#pbPageSizeCustom').val(pbPageSize).show();
+            $('#pbPageSizeCustom').val(pbPageSize).css('display', 'inline-block');
+            $('#pbPageSizeMax').css('display', 'inline-block');
         } else {
-            $('#pbPageSizeCustom').hide();
+            $('#pbPageSizeCustom').css('display', 'none');
+            $('#pbPageSizeMax').css('display', 'none');
         }
         var k = pbSort.k, dir = pbSort.dir;
         $('#pbTbl thead .pbcar').html('');
