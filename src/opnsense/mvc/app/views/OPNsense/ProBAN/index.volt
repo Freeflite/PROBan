@@ -42,6 +42,18 @@
   </div></div>
   <div class="col-md-4"><div class="content-box" style="padding:15px;height:100%;"><b>{{ lang._('By level') }}</b><div style="height:330px;position:relative;margin-top:6px;"><canvas id="pbTiers"></canvas></div></div></div>
 </div>
+<div id="pbDemoCard" class="alert alert-info" role="region" aria-label="{{ lang._('Demo mode') }}" style="display:none; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
+  <i class="fa fa-flask" aria-hidden="true"></i>
+  <b>{{ lang._('Demo mode') }}</b>
+  <span class="text-muted" style="font-size:12px;">{{ lang._('Synthetic offenders in the non-routable 198.18.0.0/15 test range — for evaluating the dashboard. Purge when done.') }}</span>
+  <span style="margin-left:auto; display:inline-flex; align-items:center; gap:6px;">
+    <label for="pbDemoCount" class="sr-only">{{ lang._('How many to seed') }}</label>
+    <input type="number" id="pbDemoCount" class="form-control input-sm" min="1" max="50000" value="5000" style="width:92px; display:inline-block;" title="{{ lang._('How many synthetic offenders to seed (max 50000)') }}">
+    <button type="button" class="btn btn-primary btn-sm" id="pbDemoSeed"><i class="fa fa-plus" aria-hidden="true"></i> {{ lang._('Seed') }}</button>
+    <button type="button" class="btn btn-default btn-sm" id="pbDemoPurge"><i class="fa fa-trash" aria-hidden="true"></i> {{ lang._('Purge') }}</button>
+    <span id="pbDemoMsg" style="font-size:12px; margin-left:4px;"></span>
+  </span>
+</div>
 <div class="content-box" style="padding:15px;">
   <b>{{ lang._('Offenders') }}</b> <small class="text-muted">- {{ lang._('click a row for its full history') }}</small>
   <div style="margin:6px 0; display:flex; gap:14px; align-items:center; flex-wrap:wrap; font-size:11px;">
@@ -216,12 +228,36 @@
         <div class="col-xs-6"><label for="pbTimeSource" style="font-size:11px;">{{ lang._('Show times in') }}</label><select class="form-control input-sm" id="pbTimeSource"><option value="browser">{{ lang._('Browser time (this device)') }}</option><option value="firewall">{{ lang._('Firewall time') }}</option></select></div>
         <div class="col-xs-6"><small class="text-muted" style="display:block;margin-top:18px;">{{ lang._('Which clock every timestamp on the dashboard is shown in.') }}</small></div>
       </div>
+      <div class="checkbox" style="margin-top:12px;"><label><input type="checkbox" id="pbDemoMode"> {{ lang._('Demo mode') }} <small class="text-muted">{{ lang._('(exposes synthetic-data controls on the dashboard)') }}</small></label></div>
+      <small class="text-muted">{{ lang._('For evaluating the dashboard: seed and purge fake offenders in the non-routable 198.18.0.0/15 test range.') }}</small>
     </div>
   </div>
   <div class="modal-footer">
     <span id="pbSaveMsg" class="text-danger" style="margin-right:10px;"></span>
     <button type="button" class="btn btn-default" data-dismiss="modal">{{ lang._('Cancel') }}</button>
     <button type="button" class="btn btn-primary" id="pbSaveBtn">{{ lang._('Save') }}</button>
+  </div>
+</div></div></div>
+<div class="modal fade" id="pbDemoAck" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-flask"></i> {{ lang._('Enable demo mode?') }}</h4></div>
+  <div class="modal-body">
+    <p>{{ lang._('Demo mode exposes controls on the dashboard that populate the offender store with synthetic offenders, confined to the non-routable 198.18.0.0/15 test range.') }}</p>
+    <div class="alert alert-warning" style="margin-bottom:0;"><i class="fa fa-exclamation-triangle"></i> {{ lang._('While the engine is enforcing, these synthetic entries are added to the PF block table. This is intended for evaluating the dashboard, not for production. Please purge the synthetic data when you are done.') }}</div>
+  </div>
+  <div class="modal-footer">
+    <button type="button" class="btn btn-default" data-dismiss="modal" id="pbDemoAckCancel">{{ lang._('Cancel') }}</button>
+    <button type="button" class="btn btn-primary" id="pbDemoAckOk">{{ lang._('Enable demo mode') }}</button>
+  </div>
+</div></div></div>
+<div class="modal fade" id="pbDemoSeedConfirm" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+  <div class="modal-header"><button type="button" class="close" data-dismiss="modal">&times;</button><h4 class="modal-title"><i class="fa fa-flask"></i> {{ lang._('Seed synthetic offenders?') }}</h4></div>
+  <div class="modal-body">
+    <p>{{ lang._('This inserts synthetic offenders into the live offender store') }} (<b><span id="pbDemoConfirmCount">5000</span></b>, {{ lang._('all in the non-routable 198.18.0.0/15 test range) and replaces any synthetic data already there.') }}</p>
+    <div class="alert alert-warning" style="margin-bottom:0;"><i class="fa fa-exclamation-triangle"></i> {{ lang._('On an enforcing firewall these entries are added to the PF block table. Purge them when you are done. This is for evaluation, not production.') }}</div>
+  </div>
+  <div class="modal-footer">
+    <button type="button" class="btn btn-default" data-dismiss="modal">{{ lang._('Cancel') }}</button>
+    <button type="button" class="btn btn-primary" id="pbDemoSeedOk">{{ lang._('Seed anyway') }}</button>
   </div>
 </div></div></div>
 <script>
@@ -244,7 +280,12 @@ PROBAN.T = {
   noHistoryRet: "{{ lang._('No per-hit history retained for this source — event detail is pruned after %D% days (Event retention). The lifetime hit count and ban are kept longer (Offender amnesia).') }}",
   tzLabel: "{{ lang._('times: %S%') }}",
   tzBrowser: "{{ lang._('this device') }}",
-  tzFirewall: "{{ lang._('firewall') }}"
+  tzFirewall: "{{ lang._('firewall') }}",
+  demoSeeding: "{{ lang._('Seeding…') }}",
+  demoPurging: "{{ lang._('Purging…') }}",
+  demoSeeded: "{{ lang._('Seeded %N% synthetic offenders (%A% active) — %T% total.') }}",
+  demoPurged: "{{ lang._('Purged %N% synthetic offenders.') }}",
+  demoFailed: "{{ lang._('Demo action failed') }}"
 };
 </script>
 <script src="{{ cache_safe('/ui/js/proban/format.js') }}"></script>
@@ -252,4 +293,5 @@ PROBAN.T = {
 <script src="{{ cache_safe('/ui/js/proban/api.js') }}"></script>
 <script src="{{ cache_safe('/ui/js/proban/dashboard.js') }}"></script>
 <script src="{{ cache_safe('/ui/js/proban/settings.js') }}"></script>
+<script src="{{ cache_safe('/ui/js/proban/demo.js') }}"></script>
 <script src="{{ cache_safe('/ui/js/proban/proban.js') }}"></script>

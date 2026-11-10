@@ -225,5 +225,9 @@
             <MaximumValue>315360000</MaximumValue>
             <Required>Y</Required>
         </blackhole_decay>
+        <demo_mode type="BooleanField">
+            <Default>0</Default>
+            <Required>Y</Required>
+        </demo_mode>
     </items>
 </model>

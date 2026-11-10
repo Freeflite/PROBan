@@ -14,5 +14,7 @@ PROBAN.api = {
         ajaxGet('/api/proban/overview/events', Object.assign({}, params || {}, {ip: ip}), cb);
     },
     settingsGet: function (cb) { ajaxGet('/api/proban/settings/get', {}, cb); },
-    settingsSet: function (payload, cb) { ajaxCall('/api/proban/settings/set', payload, cb); }
+    settingsSet: function (payload, cb) { ajaxCall('/api/proban/settings/set', payload, cb); },
+    demoSeed: function (count, cb) { ajaxCall('/api/proban/demo/seed', {count: count}, cb); },
+    demoPurge: function (cb) { ajaxCall('/api/proban/demo/purge', {}, cb); }
 };

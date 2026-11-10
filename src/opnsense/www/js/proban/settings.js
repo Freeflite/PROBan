@@ -29,6 +29,7 @@ PROBAN.settings = (function () {
             $('#pbAmnesia').val(d.offender_amnesia_days != null ? d.offender_amnesia_days : 30);
             $('#pbHideExpired').prop('checked', d.hide_expired == 1);
             $('#pbTimeSource').val(d.time_source === 'firewall' ? 'firewall' : 'browser');
+            $('#pbDemoMode').prop('checked', d.demo_mode == 1);
             $('#pbAllow').val((d.allowlist || []).join('\n'));
             $('#pbSrcFw').prop('checked', !d.sources || d.sources.firewall != 0);
             $('#pbSrcSuri').prop('checked', !d.sources || d.sources.suricata != 0);
@@ -87,6 +88,7 @@ PROBAN.settings = (function () {
             offender_amnesia_days: parseInt($('#pbAmnesia').val(), 10),
             hide_expired: $('#pbHideExpired').prop('checked') ? 1 : 0,
             time_source: ($('#pbTimeSource').val() === 'firewall') ? 'firewall' : 'browser',
+            demo_mode: $('#pbDemoMode').prop('checked') ? 1 : 0,
             allowlist: allow,
             src_firewall: $('#pbSrcFw').prop('checked') ? 1 : 0,
             src_suricata: $('#pbSrcSuri').prop('checked') ? 1 : 0,
@@ -145,6 +147,17 @@ PROBAN.settings = (function () {
         $('#pbDetectV6Rotation').on('change', updateV6RotationUI);
         $('#pbSettingsBtn').on('click', open);
         $('#pbSaveBtn').on('click', save);
+        // Enabling demo mode requires an explicit acknowledgement. Checking the box
+        // pops the modal; confirming keeps it checked, cancelling reverts it. (The
+        // setting isn't persisted until Save -- this just gates the intent.)
+        var demoAckConfirmed = false;
+        $('#pbDemoMode').on('change', function () {
+            if ($(this).prop('checked')) { demoAckConfirmed = false; $('#pbDemoAck').modal('show'); }
+        });
+        $('#pbDemoAckOk').on('click', function () { demoAckConfirmed = true; $('#pbDemoAck').modal('hide'); });
+        $('#pbDemoAck').on('hidden.bs.modal', function () {
+            if (!demoAckConfirmed) $('#pbDemoMode').prop('checked', false);
+        });
     }
     return {init: init, open: open, save: save};
 })();

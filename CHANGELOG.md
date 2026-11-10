@@ -35,6 +35,19 @@ engine-resilience hardening.
 - **"Blocked until" column hint** explaining it is the wall-clock expiry *after* ban
   decay — at the default decay rate (half real-time) a block outlasts its current
   "Ban" value by ~2× — and that the decay rate is tunable under Settings. (#10)
+- **Demo mode (Settings → Housekeeping → "Demo mode").** An off-by-default switch that,
+  once enabled, exposes a card above the offenders table to populate the dashboard with
+  **synthetic** offenders and to purge them again — so the paging, the 500-row page-size
+  cap, the hits modal, and the stats tiles can be exercised against a realistic data set
+  without waiting for real traffic. Guard rails: every synthetic row is confined to the
+  non-routable RFC 2544 benchmarking block (`198.18.0.0/15`), so seeded data can never
+  reach a real host and one purge removes exactly what was added; enabling the mode first
+  requires acknowledging a modal, and each seed requires a second confirmation (for
+  production boxes); seeding is refused server-side unless demo mode is on (not merely
+  hidden in the UI), while purge is always allowed so synthetic data can be cleaned up
+  even after the mode is switched back off. The same seeding core backs the dev CLI
+  (`tools/seed_offenders.py`) and the in-UI control, sharing the engine's own schema so
+  the two can never drift.
 
 ## 0.1.4 (2026-11-08)
 

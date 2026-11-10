@@ -5,4 +5,5 @@ window.PROBAN = window.PROBAN || {};
 $(function () {
     PROBAN.dashboard.init();
     PROBAN.settings.init();
+    if (PROBAN.demo) PROBAN.demo.init();
 });

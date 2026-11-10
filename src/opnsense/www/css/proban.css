@@ -16,3 +16,6 @@
    and the .input-sm padding that leaves a ~19px content box, so the 31px text line is
    clipped top/bottom (worst at the bottom). Let the settings dropdowns size to content. */
 .pb-sect select.form-control.input-sm{height:auto;line-height:1.5;}
+/* The demo-mode acknowledgement pops while the Settings modal is still open;
+   lift it above the 1050 Bootstrap modal layer so it sits on top. */
+#pbDemoAck{z-index:1070;}

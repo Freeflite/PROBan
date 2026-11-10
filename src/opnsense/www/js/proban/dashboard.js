@@ -138,6 +138,7 @@ PROBAN.dashboard = (function () {
             var prevMode = fmt.timeMode ? fmt.timeMode() : 'browser';
             if (fmt.setTimeMode) fmt.setTimeMode(d.time_source, d.tz);
             if (d.retention_days != null) pbRetentionDays = d.retention_days;
+            if (PROBAN.demo) PROBAN.demo.reflect(d.demo_mode == 1);
             updateTzLabel();
             if (fmt.timeMode && fmt.timeMode() !== prevMode) { if (pbRows.length) renderOffenders(); loadTimeline(); }
             $('#pb-total').text(d.total || 0); $('#pb-active').text(d.active || 0); $('#pb-events').text(d.events24h || 0);

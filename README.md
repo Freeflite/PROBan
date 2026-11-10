@@ -10,6 +10,10 @@ ProBAN watches your firewall (and optionally Suricata) logs, and every time an I
 
 ---
 
+**Quick nav:** [Why](#why) · [How it works](#how-the-ban-works) · [Dashboard](#dashboard) · [Deploy](#deploy--0--hero) · [Testing &amp; demo mode](#testing) · [Status](#status--roadmap) · [License](#license)
+
+---
+
 ## Why
 
 Fixed-tier fail2ban-style blocking treats the guy who fat-fingered your SSH once the same as the botnet hammering Telnet 10,000 times a day. ProBAN is **progressive**: the punishment fits the persistence, automatically, with no tiers to tune.
@@ -101,7 +105,9 @@ Reasons identify the probe type, destination and WAN, or the Suricata signature,
 
 Under **Reporting → ProBAN**: live offender count / active blocks / events, a scrubbable offense timeline (5m–24h resolution, pan back/forward), a by-severity doughnut, a **click-to-sort** offender table with per-IP drill-down, a target health badge, and a settings panel for every knob (grace, step, multiplier, max-ban as `1y 2d`, decay, blackhole, allowlist, retention, protected ports).
 
-The offenders table supports **pagination** (25 / 50 / 100 / custom / ALL rows) and an **IPv4 / IPv6 / Both** filter/switcher. Column sorting is preserved when you change page size or the IPv filter (sorting and pagination are coordinated server-side for the current view). Controls are always visible above the table.
+The offenders table supports **pagination** (25 / 50 / 100 / custom, up to 500 rows) and an **IPv4 / IPv6 / Both** filter/switcher. Column sorting is preserved when you change page size or the IPv filter (sorting and pagination are coordinated server-side for the current view). Controls are always visible above the table.
+
+Want to see the dashboard with a full table before real traffic rolls in? A built-in, off-by-default **[demo mode](#demo-mode)** seeds (and purges) synthetic offenders straight from the UI.
 
 **Search IP or prefix** filters stored addresses case-insensitively by literal text, including IPv6 subnet rows. Search works with the address-family and expiry filters, sorting and pagination; the dashboard-wide statistics remain independent of the search. If a data refresh fails, the last available values stay visible with a warning instead of being replaced by zeros or an empty table.
 
@@ -244,6 +250,10 @@ python3 tools/seed_offenders.py --purge
 ```
 
 It's a dev helper (not shipped in the plugin — the Makefile packages `src/` only), reuses the engine's `proban.store` schema, and confines every row to the non-routable RFC 2544 block (`198.18.0.0/15`) so the synthetic data is obvious and one `--purge` removes it cleanly. See the script's `--help` for `--net`, `--active-frac`, `--seed`, and `--no-clear`.
+
+#### Demo mode
+
+The same seed/purge core is also wired into the dashboard for people who want to *see* a populated board without a shell. Enable **Settings → Housekeeping → "Demo mode"** (off by default; enabling it requires acknowledging a one-time modal), and a card appears above the offenders table to seed synthetic offenders and to purge them again. Seeding pops a second confirmation (so it can't be a misclick on a production box) and is refused server-side unless demo mode is on; purge is always allowed. Rows stay in `198.18.0.0/15` just like the CLI — the UI and `tools/seed_offenders.py` share one implementation (`proban/demo.py`), so they can't drift.
 
 ## Status & Roadmap
 
