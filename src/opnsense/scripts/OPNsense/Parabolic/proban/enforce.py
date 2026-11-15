@@ -200,20 +200,40 @@ def enforce_pending(cfg, connection, now, pending):
                     if not rules.allowed(cfg, ip))
     active, dropped, v6_all, tables = table_plan(cfg, rows, now)
     snapshots = connection if cfg.sources.get("firewall", True) else None
+    errors = []
     for table, addresses in tables:
         if addresses:
-            synctable(table, addresses, snapshots, additive=True)
+            try:
+                synctable(table, addresses, snapshots, additive=True)
+            except (OSError, subprocess.SubprocessError) as error:
+                errors.append(f"{table}: {type(error).__name__}: {error}")
+    if errors:
+        store.ss(connection, "pf_error", "; ".join(errors))
 
 
 def enforce(cfg, c, now):
-    """Return active, dropped, IPv6 entries and mode after a full table reconciliation."""
+    """Reconcile every pf table against the desired ban set and report the mode.
+
+    Enforcement is best-effort and declarative: a slow or failing pfctl (e.g. the
+    firewall contending under heavy load, or another product holding it up) is
+    caught per-table, recorded in the 'pf_error' state key, and reported as
+    DEGRADED instead of raising. The caller commits detection + decay BEFORE
+    calling this, so a degraded pfctl can never roll back the firewall-log read
+    offset or newly recorded offenders; because the reconciliation is idempotent,
+    the next cycle re-applies whatever could not be written now."""
     rows = [(ip, bh or 0) for ip, bh in
             c.execute("SELECT ip,blackhole_until FROM offenders WHERE ban_secs>0").fetchall()
             if not rules.allowed(cfg, ip)]
     active, dropped, v6_all, tables = table_plan(cfg, rows, now)
     if cfg.dry_run:
+        store.ss(c, "pf_error", "")
         return active, dropped, v6_all, "DRY-RUN"
     snapshots = c if cfg.sources.get("firewall", True) else None
+    errors = []
     for table, addresses in tables:
-        synctable(table, addresses, snapshots)
-    return active, dropped, v6_all, "enforced"
+        try:
+            synctable(table, addresses, snapshots)
+        except (OSError, subprocess.SubprocessError) as error:
+            errors.append(f"{table}: {type(error).__name__}: {error}")
+    store.ss(c, "pf_error", "; ".join(errors))
+    return active, dropped, v6_all, ("enforced" if not errors else "DEGRADED")

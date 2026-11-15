@@ -7,6 +7,7 @@
 <div id="pbTamper" class="alert alert-danger" style="display:none;"><i class="fa fa-exclamation-triangle"></i> <b>{{ lang._('TAMPER DETECTED') }}</b> &mdash; {{ lang._('the tarpit redirect was pointed at a public IP') }} (<span id="pbTamperIp"></span>). {{ lang._('The block table has been flushed to prevent outbound reflection. Fix the target to a private/LAN address in Settings.') }}</div>
 <div id="pbRefreshError" class="alert alert-warning" role="status" style="display:none;"><i class="fa fa-exclamation-triangle"></i> {{ lang._('Dashboard refresh delayed. The last available data is retained.') }}</div>
 <div id="pbCounterError" class="alert alert-warning" style="display:none;"><i class="fa fa-exclamation-triangle"></i> <b>{{ lang._('PF counters unavailable') }}</b>: <span id="pbCounterErrorText"></span></div>
+<div id="pbPfError" class="alert alert-warning" style="display:none;"><i class="fa fa-exclamation-triangle"></i> <b>{{ lang._('Firewall enforcement degraded') }}</b> &mdash; {{ lang._('pf table updates are failing, so active blocks may be stale. Detection and the offender database are unaffected and the engine keeps retrying each cycle.') }} <span id="pbPfErrorText"></span></div>
 <div class="row">
   <div class="col-xs-3"><div class="content-box pb-card"><div class="n" id="pb-total">-</div><div class="l">{{ lang._('Offenders') }}</div></div></div>
   <div class="col-xs-3"><div class="content-box pb-card"><div class="n" id="pb-active">-</div><div class="l">{{ lang._('Active Blocks') }}</div></div></div>

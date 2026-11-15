@@ -47,6 +47,7 @@ class OverviewController extends \OPNsense\Base\ApiControllerBase
             while ($x = $r->fetchArray(SQLITE3_ASSOC)) $levels[(string)$x['level']] = (int)$x['c'];
             $tamper = (string)@$db->querySingle("SELECT v FROM state WHERE k='tamper'");
             $counterError = (string)$db->querySingle("SELECT v FROM state WHERE k='counter_error'");
+            $pfError = (string)$db->querySingle("SELECT v FROM state WHERE k='pf_error'");
             $eventHits = $this->eventHits($db);
             // Display metadata for the dashboard: the firewall's own time zone (so it can
             // optionally pin all timestamps to firewall time), the chosen time source, and
@@ -60,6 +61,7 @@ class OverviewController extends \OPNsense\Base\ApiControllerBase
                 "levels" => $levels,
                 "tamper" => $tamper,
                 "counter_error" => $counterError,
+                "pf_error" => $pfError,
                 "tz" => @date_default_timezone_get() ?: "UTC",
                 "time_source" => ((string)$g->time_source === "firewall") ? "firewall" : "browser",
                 "retention_days" => (int)((string)$g->event_retention_days),

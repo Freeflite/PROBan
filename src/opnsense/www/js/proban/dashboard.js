@@ -145,6 +145,7 @@ PROBAN.dashboard = (function () {
             $('#pb-mode').text(d.mode || '-').css('color', d.mode === 'enforcing' ? '#c62828' : (d.mode === 'disabled' ? '#999' : '#ff9800'));
             if (d.tamper) { $('#pbTamperIp').text(d.tamper); $('#pbTamper').show(); } else { $('#pbTamper').hide(); }
             if (d.counter_error) { $('#pbCounterErrorText').text(d.counter_error); $('#pbCounterError').show(); } else { $('#pbCounterError').hide(); }
+            if (d.pf_error) { $('#pbPfErrorText').text(d.pf_error); $('#pbPfError').show(); } else { $('#pbPfError').hide(); }
             var L = [], V = [], C = []; $.each(d.levels || {}, function (t, c) { if (parseInt(t) > 0) { L.push('L' + t); V.push(c); C.push(fmt.tcolor(parseInt(t))); } });
             if (window.Chart) { if (chTi) chTi.destroy(); chTi = new Chart(document.getElementById('pbTiers'), {type: 'doughnut', data: {labels: L, datasets: [{data: V, backgroundColor: C}]}, options: {maintainAspectRatio: false, plugins: {legend: {position: 'bottom'}}}}); }
         });

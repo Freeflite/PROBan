@@ -57,6 +57,10 @@ def run_cycle(cfg, c, maintenance=True):
     backlog = sum(int(store.gs(c, key + "_backlog", "0")) for source, key in
                   (("firewall", "fw_offset"), ("suricata", "eve_offset")) if cfg.sources.get(source, True))
     if not maintenance:
+        # Persist ingest (incl. the firewall-log read offset) BEFORE enforcement so a
+        # slow or failing pfctl can't roll back detection progress on the fast path.
+        c.commit()
+        c.execute("BEGIN IMMEDIATE")
         enforce.enforce_pending(cfg, c, now, pending)
         c.commit()
         if nf or ns or backlog:
@@ -74,15 +78,23 @@ def run_cycle(cfg, c, maintenance=True):
     if cfg.amnesia > 0:
         c.execute("DELETE FROM offenders WHERE last_seen < ? AND ban_secs<=0", (now - cfg.amnesia * 86400,))
 
+    # Persist detection + decay BEFORE enforcement. Enforcement is declarative and
+    # idempotent, so if a slow/failing pfctl makes this cycle DEGRADED, the firewall-log
+    # read offset and the newly recorded offenders are already committed and the next
+    # cycle reconciles the tables. (The old single-commit-after-enforce coupling meant a
+    # pfctl stall rolled the entire cycle back and silently froze detection.)
+    c.commit()
+    c.execute("BEGIN IMMEDIATE")
     active, dropped, v6set, em = enforce.enforce(cfg, c, now)
     c.commit()
 
     tot = c.execute("SELECT COUNT(*) FROM offenders").fetchone()[0]
     bh = f" blackhole={len(dropped)}" if cfg.blackhole_on else ""
     v6n = f" v6={len(v6set)}" if v6set else ""
+    pferr = store.gs(c, "pf_error") if em == "DEGRADED" else ""
     print(f"ingested fw={nf} suri={ns} pf={npf} | offenders={tot} active={len(active)}{bh}{v6n} "
             f"step={cfg.step} mult={cfg.mult} maxban={int(cfg.maxban)}s decay={int(cfg.damt)}/{int(cfg.dint)}s "
-            f"backlog={backlog}B | {em}")
+            f"backlog={backlog}B | {em}" + (f" | pf degraded: {pferr}" if pferr else ""))
 
 
 def file_signature(path):

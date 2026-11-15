@@ -25,6 +25,19 @@ engine-resilience hardening.
   for that pass and the next write repopulates `last_calc`), and each row is processed
   independently so one bad row is logged and skipped instead of halting the pass.
 
+- **A slow or failing `pfctl` could silently freeze detection.** Each maintenance cycle
+  ran inside a single transaction that only committed *after* the pf-table enforcement
+  step, so if a `pfctl` call stalled or errored (e.g. the firewall contending under heavy
+  load, or another product holding the pf tables), the whole cycle rolled back — including
+  the firewall-log read offset and any newly recorded offenders. The engine then re-read
+  the same log lines every cycle and the offender count never climbed, with no error
+  surfaced. Detection + decay are now committed **before** enforcement, and enforcement is
+  best-effort per table: a failed `pfctl` is caught, the cycle is marked **DEGRADED** with
+  the reason recorded, and the next cycle re-reconciles the tables (the reconciliation is
+  declarative/idempotent, so nothing is lost). A new **"Firewall enforcement degraded"**
+  dashboard banner shows when pf updates are failing, making the condition visible instead
+  of a silent stall. The same decoupling is applied to the fast (sub-cycle) ingest path.
+
 ### Added
 - **Time-source setting (Settings → Housekeeping → "Show times in").** Choose whether
   the dashboard renders every timestamp in **browser time** (the viewer's local zone,
