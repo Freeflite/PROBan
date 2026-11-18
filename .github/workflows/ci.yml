@@ -1,0 +1,139 @@
+# Every push and pull request: the engine and API tests, then the os-proban package build,
+# all inside a FreeBSD VM (the platform OPNsense runs on).
+#
+# Tags (v*): the package also gets a signed build-provenance attestation, the signed package
+# repository on GitHub Pages is replaced with the new version (so OPNsense firewalls that
+# added the repository see the update under System > Firmware), and a GitHub release is
+# created with the package attached.
+#
+# Third-party actions are pinned to full commit SHAs (the comment says which release), so a
+# moved tag can't change what runs here.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test and package (FreeBSD)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Fail a release before anything is built or published if its notes are missing.
+      - name: Check release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          test -f "docs/releases/$TAG.md" || { echo "Missing release notes: docs/releases/$TAG.md"; exit 1; }
+      - name: Test and build in a FreeBSD VM
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
+        env:
+          # Set only for tags: build-package.sh then refuses a tag that doesn't match the Makefile.
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        with:
+          release: "14.3"
+          envs: "TAG GITHUB_SHA"
+          prepare: |
+            export ASSUME_ALWAYS_YES=yes
+            pkg -N > /dev/null 2>&1 || pkg bootstrap -y
+            pkg install -y git python313 py313-sqlite3 php83 php83-ctype php83-filter php83-sqlite3
+          run: |
+            set -e
+            python3.13 -m unittest discover -s tests
+            php tests/test_overview.php
+            sh tools/build-package.sh dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: package
+          path: dist/*.pkg
+          if-no-files-found: error
+
+  # Tags only. The repository signing key is used here and nowhere else, on a package the
+  # build job produced; this job can't write to the repository or deploy anything.
+  sign:
+    name: Attest and sign the package repository
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+          path: dist
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.pkg
+      - name: Build the signed repository in a FreeBSD VM
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
+        env:
+          PKG_SIGNING_KEY_B64: ${{ secrets.PKG_SIGNING_KEY_B64 }}
+        with:
+          release: "14.3"
+          envs: "PKG_SIGNING_KEY_B64"
+          prepare: |
+            export ASSUME_ALWAYS_YES=yes
+            pkg -N > /dev/null 2>&1 || pkg bootstrap -y
+          run: |
+            set -e
+            sh tools/build-repo.sh dist/os-proban-*.pkg site
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+  # Tags only. Firewalls get the update first (Pages), then the GitHub release follows.
+  publish:
+    name: Publish repository and release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [sign]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - name: Deploy the package repository to GitHub Pages
+        id: pages
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+          path: dist
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          (cd dist && sha256sum *.pkg > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --title "ProBAN ${TAG#v}" \
+            --notes-file "docs/releases/$TAG.md" --verify-tag
