@@ -1,0 +1,6 @@
+# Restart the engine so a newly installed or upgraded version runs right away, instead of the
+# old code staying in memory until the next reboot. Skipped when ProBAN is disabled.
+if /usr/local/etc/rc.d/proban enabled; then
+	echo -n 'Restarting ProBAN engine: '
+	/usr/local/etc/rc.d/proban restart > /dev/null 2>&1 && echo 'done' || echo 'failed'
+fi
