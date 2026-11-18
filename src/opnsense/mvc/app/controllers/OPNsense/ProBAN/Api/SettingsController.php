@@ -55,7 +55,7 @@ class SettingsController extends ApiControllerBase
             "event_retention_days" => (int)((string)$mdl->event_retention_days),
             "offender_amnesia_days" => (int)((string)$mdl->offender_amnesia_days),
             "hide_expired" => (int)((string)$mdl->hide_expired),
-            "time_source" => ((string)$mdl->time_source === "firewall") ? "firewall" : "browser",
+            "time_source" => ((string)$mdl->time_source === "browser") ? "browser" : "firewall",
             "demo_mode" => (int)((string)$mdl->demo_mode),
             "allowlist" => $allow,
             "sources" => [
@@ -119,7 +119,7 @@ class SettingsController extends ApiControllerBase
         $mdl->event_retention_days = (string)max(0, (int)$req->getPost("event_retention_days", "int", 14));
         $mdl->offender_amnesia_days = (string)max(0, (int)$req->getPost("offender_amnesia_days", "int", 30));
         $mdl->hide_expired = $req->getPost("hide_expired", "int", (int)((string)$mdl->hide_expired)) ? "1" : "0";
-        $mdl->time_source = ($req->getPost("time_source", "string", "browser") === "firewall") ? "firewall" : "browser";
+        $mdl->time_source = ($req->getPost("time_source", "string", "firewall") === "browser") ? "browser" : "firewall";
         $mdl->demo_mode = $req->getPost("demo_mode", "int", (int)((string)$mdl->demo_mode)) ? "1" : "0";
 
         $al = $req->getPost("allowlist");

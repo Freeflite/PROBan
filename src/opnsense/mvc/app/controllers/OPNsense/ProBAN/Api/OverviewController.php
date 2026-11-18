@@ -63,7 +63,7 @@ class OverviewController extends \OPNsense\Base\ApiControllerBase
                 "counter_error" => $counterError,
                 "pf_error" => $pfError,
                 "tz" => @date_default_timezone_get() ?: "UTC",
-                "time_source" => ((string)$g->time_source === "firewall") ? "firewall" : "browser",
+                "time_source" => ((string)$g->time_source === "browser") ? "browser" : "firewall",
                 "retention_days" => (int)((string)$g->event_retention_days),
                 "demo_mode" => (int)((string)$g->demo_mode)
             ];

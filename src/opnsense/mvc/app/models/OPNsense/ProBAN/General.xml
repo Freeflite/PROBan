@@ -165,7 +165,7 @@
             <Required>Y</Required>
         </hide_expired>
         <time_source type="TextField">
-            <Default>browser</Default>
+            <Default>firewall</Default>
             <Required>Y</Required>
             <Mask>/^(browser|firewall)$/</Mask>
             <ValidationMessage>Dashboard times: browser (viewer's local zone) or firewall (the firewall's own zone).</ValidationMessage>

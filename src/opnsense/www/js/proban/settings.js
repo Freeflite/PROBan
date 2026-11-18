@@ -28,7 +28,7 @@ PROBAN.settings = (function () {
             $('#pbEventRet').val(d.event_retention_days != null ? d.event_retention_days : 14);
             $('#pbAmnesia').val(d.offender_amnesia_days != null ? d.offender_amnesia_days : 30);
             $('#pbHideExpired').prop('checked', d.hide_expired == 1);
-            $('#pbTimeSource').val(d.time_source === 'firewall' ? 'firewall' : 'browser');
+            $('#pbTimeSource').val(d.time_source === 'browser' ? 'browser' : 'firewall');
             $('#pbDemoMode').prop('checked', d.demo_mode == 1);
             $('#pbAllow').val((d.allowlist || []).join('\n'));
             $('#pbSrcFw').prop('checked', !d.sources || d.sources.firewall != 0);
@@ -87,7 +87,7 @@ PROBAN.settings = (function () {
             event_retention_days: parseInt($('#pbEventRet').val(), 10),
             offender_amnesia_days: parseInt($('#pbAmnesia').val(), 10),
             hide_expired: $('#pbHideExpired').prop('checked') ? 1 : 0,
-            time_source: ($('#pbTimeSource').val() === 'firewall') ? 'firewall' : 'browser',
+            time_source: ($('#pbTimeSource').val() === 'browser') ? 'browser' : 'firewall',
             demo_mode: $('#pbDemoMode').prop('checked') ? 1 : 0,
             allowlist: allow,
             src_firewall: $('#pbSrcFw').prop('checked') ? 1 : 0,
