@@ -4,7 +4,7 @@
 
 ProBAN watches your firewall (and optionally Suricata) logs, and every time an IP probes your WAN it *grows* that IP's ban. The ban accelerates with each hit and decays during silence — so a drive-by scanner earns a 30-second timeout, while a persistent attacker digs itself into a ban measured in days, then months. Banned IPs can be silently **dropped**, funneled into a **tarpit** that wastes their time and sockets, or redirected to a **honeypot** on ports you choose — all rendered in a live dashboard under **Reporting → ProBAN**.
 
-> **Status: packaged plugin (0.1.3), validated live on OPNsense 26.7** (and earlier on 26.1). The progressive engine, dashboard, and drop/tarpit/honeypot enforcement run and enforce on a live OPNsense box, wired up the proper OPNsense way — settings in a **model XML** (`config.xml`, so they're backed up and upgrade-safe), the engine as a **configd/rc.d service**, `config.json` generated from a **template**, and firewall rules owned by a **`plugins.inc.d` hook** (external alias + block / `rdr pass`). Verified end-to-end on OPNsense 26.7 / PHP 8.3: model load, template render, service lifecycle, firewall-rule generation, PF block enforcement, PF counter-based re-escalation, and the dashboard API. **0.1.3 fixes a service-start failure (`configd` exit status 126) that affected OPNsense 26.7** — see the [changelog](CHANGELOG.md). See [Status & Roadmap](#status--roadmap). Contributions and review welcome.
+> **Status: packaged plugin (0.1.6), installed and updated through its own signed package repository** ([install](#1-install-the-plugin)), **validated live on OPNsense 26.7** (and earlier on 26.1). The progressive engine, dashboard, and drop/tarpit/honeypot enforcement run and enforce on a live OPNsense box, wired up the proper OPNsense way — settings in a **model XML** (`config.xml`, so they're backed up and upgrade-safe), the engine as a **configd/rc.d service**, `config.json` generated from a **template**, and firewall rules owned by a **`plugins.inc.d` hook** (external alias + block / `rdr pass`). Verified end-to-end on OPNsense 26.7 / PHP 8.3: model load, template render, service lifecycle, firewall-rule generation, PF block enforcement, PF counter-based re-escalation, and the dashboard API. **0.1.3 fixes a service-start failure (`configd` exit status 126) that affected OPNsense 26.7** — see the [changelog](CHANGELOG.md). See [Status & Roadmap](#status--roadmap). Contributions and review welcome.
 
 ![ProBAN settings](docs/images/settings.png)
 
@@ -120,7 +120,10 @@ A **Protected ports** setting (comma/space separated) lets you exclude specific 
 ## Repository layout
 
 ```
-Makefile  pkg-descr                       # FreeBSD/OPNsense port metadata
+Makefile  pkg-descr  +POST_INSTALL.post  # FreeBSD/OPNsense port metadata + post-install hook
+pkg-repo/                                 # package repository: signing public key, pkg config, landing page
+tools/build-package.sh  build-repo.sh     # build the package; build + sign the repository (CI runs both)
+.github/workflows/ci.yml                  # FreeBSD tests + package on every push; publish on tags
 src/
   etc/
     inc/plugins.inc.d/proban.inc          # service registration + firewall hook (block / rdr+pass)
@@ -146,20 +149,43 @@ The companion tarpit lives in its own repo: **[TinyPit](https://github.com/Freef
 
 ProBAN is two pieces that snap together: the **OPNsense plugin** (the brain — watches logs, grows bans, owns the firewall rules) and **[TinyPit](https://github.com/Freeflite/TinyPit)** (the muscle — a tiny tarpit daemon on an isolated box that holds the redirected attackers). *Drop* mode needs only the plugin; *tarpit / honeypot* mode adds TinyPit.
 
-### 1. Build & install the plugin
+### 1. Install the plugin
 
-Build the package on a **FreeBSD VM matching your OPNsense version** (recommended), then copy the resulting `.pkg` to the firewall and `pkg add` it there. You can build on the OPNsense box itself instead, but a stock appliance ships without build tools — install them first (`pkg install -y git`; `make` is already in the FreeBSD base).
+**From the ProBAN package repository (recommended).** Add the repository once, from the firewall's shell (console option 8, or SSH):
+
+```sh
+mkdir -p /usr/local/etc/pkg/keys
+fetch -o /usr/local/etc/pkg/keys/proban.pub https://freeflite.github.io/PROBan/proban.pub
+fetch -o /usr/local/etc/pkg/repos/ProBAN.conf https://freeflite.github.io/PROBan/ProBAN.conf
+```
+
+Then go to **System → Firmware → Plugins**, refresh, and install **`os-proban`**. From then on, new ProBAN versions show up in OPNsense's normal update check (**System → Firmware → Updates**) alongside everything else. Settings live in `config.xml` and the offender history in `/var/log/parabolic/`, so updates keep both, and the engine restarts onto the new version by itself.
+
+- OPNsense only installs plugins on a firewall that is itself up to date. If the Plugins page says an update is required, update OPNsense first.
+- The repository is signed. `pkg` checks every package against `proban.pub` and refuses anything that doesn't verify; the same key is in [`pkg-repo/proban.pub`](pkg-repo/proban.pub) if you want to compare.
+- Each [GitHub release](https://github.com/Freeflite/PROBan/releases) also has the `.pkg` attached, for a one-off `pkg add` without the repository (you won't get update notifications that way).
+
+**Switching from `os-proban-devel`.** Installs built from source before 0.1.6 are named `os-proban-devel`, which OPNsense hides from the Plugins list. Switch once: in **System → Firmware → Plugins**, remove `os-proban-devel`, then install `os-proban`. Your settings and offender history are kept.
+
+**Building from source.** Build on FreeBSD or on the OPNsense box itself (a stock appliance needs `pkg install -y git` first; `make` is in the FreeBSD base). `tools/build-package.sh` does the whole build against a pinned copy of OPNsense's plugin build system and checks the result:
+
+```sh
+git clone https://github.com/Freeflite/PROBan
+cd PROBan
+sh tools/build-package.sh        # writes dist/os-proban-<version>.pkg
+pkg add dist/os-proban-*.pkg
+```
+
+For live iteration on a dev box, drop the repo into an `opnsense/plugins` checkout and use OPNsense's developer mode:
 
 ```sh
 git clone https://github.com/opnsense/plugins
-git clone https://github.com/Freeflite/PROBan   # this repo — the plugin source (the cp below needs it)
-cp -a PROBan plugins/security/proban            # drop this repo in as the plugin
+cp -a PROBan plugins/security/proban
 cd plugins/security/proban
-make DEVELOPER=1 install                         # symlink live for iteration
-# or:  make package && pkg add work/pkg/*.pkg    # build + install the real .pkg
+make DEVELOPER=1 install                          # symlink live for iteration
 ```
 
-The `.pkg` post-install registers the model, renders `config.json` from the template, and starts the configd service — nothing hand-edited.
+The package's post-install registers the model, renders `config.json` from the template, reloads configd, and restarts the ProBAN service if it's enabled — nothing hand-edited.
 
 ### 2. Stand up TinyPit *(tarpit / honeypot mode only)*
 
@@ -271,6 +297,7 @@ Now wired the proper OPNsense way — **validated live on OPNsense 26.7** (and e
 - [x] Builds & installs as a real `.pkg` (`make package` → `pkg add`; the post-install migrates the model and reloads configd/templates)
 - [x] Automated tests for the engine — ban math, linear + blackhole-accelerated decay, progressive growth, v4/v6 parsing, two-table routing, **IPv6 /64 aggregation + v6 tarpit/blackhole split**, plus the 0.1.3 detections and PF counter feedback (see [Testing](#testing))
 - [x] **IPv6 tarpit parity** — v6 gets the same drop/tarpit/honeypot/blackhole path as v4 (`inet6` `rdr` + `parabolic_block6` / `parabolic_drop6`), with **evidence-based /64 aggregation** (ban /128s, escalate to the /64 only at *N* distinct offenders, so a shared hosting /64 keeps its neighbours). Validated over a ULA honeypot DMZ on OPNsense 26.1 (the v6 tarpit paths were not re-exercised on 26.7).
+- [x] **Signed package repository** — install and update from **System → Firmware** like any other plugin; CI builds and tests on FreeBSD, attests each release package, and publishes the repository on every tag
 - [x] i18n-ready — every dashboard string wrapped in `lang._()` (JS via a translated lookup with reorderable placeholders); model/menu/ACL auto-extract; flows into `make translate` / Weblate
 - [ ] (someday) federated abuser-intel: mTLS reporting to a central aggregator + shared reputation feed
 

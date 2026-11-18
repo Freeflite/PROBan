@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.1.6
+
+Updates through OPNsense's own firmware page: ProBAN now has a signed package repository,
+so after a one-time setup it is installed and updated like any other plugin.
+
+### Added
+- **ProBAN package repository** at `https://freeflite.github.io/PROBan/`. After adding it
+  once (two `fetch` commands, see the README), `os-proban` appears under
+  **System → Firmware → Plugins**, and new versions show up in OPNsense's normal update
+  check. The repository is signed; `pkg` refuses anything that doesn't verify against
+  `proban.pub`. (#12)
+- **CI.** Every push runs the engine and API tests and builds the package in a FreeBSD VM.
+  Each release tag publishes the package with a build-provenance attestation, updates the
+  repository, and attaches the `.pkg` to the GitHub release.
+
+### Changed
+- **Release builds are named `os-proban`** (previously `os-proban-devel`). OPNsense hides
+  `-devel` plugins on a normal install. Existing installs switch over once; see the
+  README's "Switching from os-proban-devel".
+- **One package for every OPNsense release.** ProBAN contains no compiled code, so the
+  package is built architecture-independent (`FreeBSD:*:*`) and installs on both
+  FreeBSD 14 (OPNsense 26.1) and FreeBSD 15 (OPNsense 26.7).
+- **Dashboard times default to firewall time**, so they match the rest of OPNsense out of
+  the box. Browser time is still available under Settings → Housekeeping → "Show times
+  in"; a saved choice is kept. In browsers that report UTC for privacy (LibreWolf, Firefox
+  with fingerprinting resistance), browser time shows UTC. (#9)
+
+### Fixed
+- **Upgrades kept running the old engine until the next reboot.** Installing or upgrading
+  the package now restarts the ProBAN service (when enabled), so the new version runs
+  immediately.
+
 ## 0.1.5 (2026-11-09)
 
 Dashboard UX pass from field reports on large offender tables (#8, #9, #10), plus an
